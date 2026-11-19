@@ -6,7 +6,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-import ai, core, gen, media, providers as P, tools, intel, remote
+import ai, billing, core, flow, gen, media, providers as P, studio, tools, intel, remote
 from core import (DATA, FILES, HERE, UserError, add_asset, asset_file, asset_public, db, get_asset, jload, job_public, row, rows, submit)
 
 import hfspace
@@ -39,11 +39,11 @@ def owner_id():
     return r[0]
 
 def can_admin(request: Request) -> bool:
-    """Кто может менять ключи и провайдеров: на компьютере — только сам компьютер; в облаке — владелец (первый аккаунт)."""
-    if CLOUD:
-        u = getattr(request.state, "user", None)
-        return bool(u) and u["id"] == owner_id()
-    return is_local(request)
+    """Кто может менять ключи и провайдеров: владелец (первый аккаунт) — с любого устройства после входа;
+    на компьютере — ещё и сам компьютер."""
+    u = getattr(request.state, "user", None)
+    if u and u["id"] == owner_id(): return True
+    return False if CLOUD else is_local(request)
 
 def is_https(request: Request) -> bool:
     return request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "") == "https"
@@ -214,7 +214,7 @@ def providers_state(request: Request):
 @app.post("/api/settings/providers")
 def providers_set(b: UseIn, request: Request):
     U(request)
-    if not can_admin(request): raise HTTPException(403, "Менять провайдеров может только владелец на компьютере (или владелец аккаунта в облаке).")
+    if not can_admin(request): raise HTTPException(403, "Менять провайдеров может только владелец — первый аккаунт MaisonAI.")
     c = P.load_cfg()
     if b.use: c["auto_best"] = False   # пользователь выбрал вручную — автонастройка не перебивает
     for cap, pid in b.use.items():
@@ -237,7 +237,7 @@ def providers_auto(request: Request):
 @app.post("/api/settings/keys")
 def keys_set(b: KeyIn, request: Request):
     U(request)
-    if not can_admin(request): raise HTTPException(403, "Ключи может вводить только владелец: на компьютере — на самом компьютере, в облаке — первый аккаунт.")
+    if not can_admin(request): raise HTTPException(403, "Ключи может вводить только владелец — первый аккаунт MaisonAI (с любого устройства после входа).")
     if b.provider not in P.PROVIDERS: raise HTTPException(400, "Неизвестный провайдер")
     sec = P.load_secrets(); cur = sec.get(b.provider) or {}
     if b.clear: sec.pop(b.provider, None)
@@ -506,11 +506,60 @@ def stats(request: Request):
                 "running": q("SELECT COUNT(*) FROM jobs WHERE user_id=? AND status IN ('queued','running')")}
 
 # ---------------- инструменты ----------------
-def start(request, tool, title, params, fn, project_id=None):
+def start(request, tool, title, params, fn, project_id=None, paid=None):
+    """paid=(ключ оценки, тело запроса): если в задаче есть платные вызовы — без подтверждённой цены не запускаем."""
     u = U(request)
     if project_id: own_project(u["id"], project_id)
+    if paid:
+        key, body = paid
+        if billing.estimate(key, body, u["id"]):
+            fp = billing.fingerprint(u["id"], key, body)
+            with db() as c:   # повторный клик с теми же параметрами, пока задача идёт, — не вторая оплата
+                r = c.execute("SELECT id FROM jobs WHERE user_id=? AND status IN ('queued','running') AND params LIKE ?", (u["id"], f'%"_fp": "{fp}"%')).fetchone()
+            if r: return {"job": r["id"], "duplicate": True}
+            try: allow = billing.authorize(u["id"], key, body)
+            except billing.NeedConfirm as e: raise HTTPException(409, e.detail)
+            if allow: params = {**params, "_allow": allow, "_fp": fp}
     jid = submit(u["id"], tool, title, params, fn, project_id or None)
     return {"job": jid}
+
+# ---------- оценка цены для задач, где может быть платная модель ----------
+@billing.estimator("image")
+def _est_image(b, uid):
+    edit = bool(b.get("source") or b.get("refs")); cap = "image_edit" if edit else "image"
+    if not billing.paid(cap): return []
+    W, H = gen.RATIOS.get(b.get("ratio", "1:1"), gen.RATIOS["1:1"])
+    return [billing.item_image(W, H, edit, f"картинка {i + 1}") for i in range(int(b.get("count") or 1))]
+
+@billing.estimator("video")
+def _est_video(b, uid):
+    out = []
+    if not billing.paid("video"): return out
+    if b.get("mode") != "i2v" and billing.paid("image"):
+        W, H = gen.RATIOS.get(b.get("ratio", "9:16"), gen.RATIOS["9:16"]); out.append(billing.item_image(W, H, False, "стартовый кадр"))
+    return out + [billing.item_video(float(b.get("duration") or 5))]
+
+@billing.estimator("photos_video")
+def _est_photos(b, uid):
+    if not b.get("ai_motion", True) or not billing.paid("video"): return []
+    return [billing.item_video(min(5, float(b.get("per_clip") or 4)), f"фото {i + 1} → видео") for i in range(len(b.get("asset_ids") or []))]
+
+def _est_plan(plan, ratio):
+    scenes = [s for s in (plan or {}).get("scenes", []) if s.get("image_prompt")]; out = []
+    W, H = gen.RATIOS.get(ratio or "9:16", gen.RATIOS["9:16"])
+    for i, s in enumerate(scenes):
+        if billing.paid("image"): out.append(billing.item_image(W, H, False, f"сцена {i + 1}: кадр"))
+        if billing.paid("video"): out.append(billing.item_video(float(s.get("duration") or 3), f"сцена {i + 1}: видео"))
+    return out
+
+@billing.estimator("recreate")
+def _est_recreate(b, uid): return _est_plan(b.get("plan"), b.get("ratio"))
+
+@billing.estimator("intel_produce")
+def _est_intel(b, uid):
+    with db() as c: r = c.execute("SELECT data FROM blueprints WHERE id=? AND user_id=?", (b.get("blueprint_id"), uid)).fetchone()
+    if not r: return []
+    bp = jload(r["data"]); return _est_plan(intel.blueprint_to_plan(bp), b.get("ratio") or bp.get("_ratio", "9:16"))
 
 def asset_path(uid, aid, kinds=("image",)):
     if not aid: return None
@@ -544,7 +593,7 @@ def t_improve(b: ImproveIn, request: Request):
 
 class ImageIn(BaseModel):
     prompt: str; ratio: str = "1:1"; seed: Optional[int] = None; source: Optional[str] = None; refs: List[str] = []
-    strength: float = 0.65; negative: str = ""; preset: str = ""; count: int = Field(1, ge=1, le=4); project_id: Optional[int] = None; style_id: Optional[str] = None
+    strength: float = 0.65; negative: str = ""; preset: str = ""; count: int = Field(1, ge=1, le=4); project_id: Optional[int] = None; style_id: Optional[str] = None; quote: str = ""
 
 PRESETS = {"character": "character design sheet, full body, consistent features, neutral background, ",
            "cover": "eye-catching TikTok cover, bold composition, strong subject, space for title text at top, ",
@@ -569,18 +618,19 @@ def t_image(b: ImageIn, request: Request):
                                  meta={"prompt": prompt, "ratio": ratio, "seed": r["seed"], "provider": r["provider"], "source": source, "edited": bool(refs)}))
         return {"assets": out}
     return start(request, "image", ("Правка: " if refs else "Картинка: ") + b.prompt[:80],
-                 {"prompt": prompt, "ratio": b.ratio, "seed": b.seed, "refs": refs, "strength": b.strength, "negative": b.negative, "count": b.count, "source": b.source}, run, b.project_id)
+                 {"prompt": prompt, "ratio": b.ratio, "seed": b.seed, "refs": refs, "strength": b.strength, "negative": b.negative, "count": b.count, "source": b.source}, run, b.project_id,
+                 paid=("image", b.model_dump()))
 
 @app.get("/api/tools/voices")
 def t_voices(request: Request): U(request); return {"voices": gen.voices(), "provider": P.chosen("tts")}
 
 class VoiceIn(BaseModel):
     text: str; voice: str = "uk-UA-PolinaNeural"; rate: int = Field(0, ge=-50, le=100); pitch: int = Field(0, ge=-50, le=50)
-    volume: int = Field(0, ge=-50, le=50); project_id: Optional[int] = None
+    volume: int = Field(0, ge=-50, le=50); emotion: str = ""; project_id: Optional[int] = None
 @app.post("/api/tools/voice")
 def t_voice(b: VoiceIn, request: Request):
-    def run(job, text, voice, rate, pitch, volume):
-        r = gen.tts(text, voice, rate, pitch, volume, job=job)
+    def run(job, text, voice, rate, pitch, volume, emotion=""):
+        r = gen.tts(text, voice, rate, pitch, volume, job=job, emotion=emotion)
         a = job.asset(r["path"], kind="audio", name=text[:50].strip() + ".mp3", meta={"text": text, "voice": voice, "rate": rate, "pitch": pitch, "segments": r["segments"], "provider": r["provider"], "duration": media.probe(r["path"])["duration"]})
         return {"asset": a, "segments": r["segments"]}
     p = b.model_dump(); pid = p.pop("project_id")
@@ -589,7 +639,7 @@ def t_voice(b: VoiceIn, request: Request):
 class VideoIn(BaseModel):
     prompt: str; mode: str = "t2v"; ratio: str = "9:16"; duration: int = Field(5, ge=2, le=60); source: Optional[str] = None
     style: str = ""; camera: str = ""; characters: str = ""; resolution: str = "720p"; seed: Optional[int] = None; negative: str = ""
-    project_id: Optional[int] = None; style_id: Optional[str] = None
+    project_id: Optional[int] = None; style_id: Optional[str] = None; quote: str = ""
 @app.post("/api/tools/video")
 def t_video(b: VideoIn, request: Request):
     u = U(request)
@@ -609,7 +659,8 @@ def t_video(b: VideoIn, request: Request):
             job.progress(0.97, "Увеличиваю до 1080p…"); path = media.upscale(path, ratio); r["provider"] += " (увеличено до 1080p)"
         a = job.asset(path, kind="video", name=prompt[:60] + ".mp4", meta={"prompt": prompt, "ratio": ratio, "duration": duration, "provider": r["provider"], "ai_video": r.get("ai_video"), "seed": r["seed"], **media.probe(path)})
         return {"asset": a, "ai_video": r.get("ai_video"), "provider": r["provider"]}
-    return start(request, "video", "Видео: " + b.prompt[:80], {"prompt": prompt, "ratio": b.ratio, "duration": b.duration, "image": img, "seed": b.seed, "negative": b.negative, "hd": b.resolution == "1080p"}, run, b.project_id)
+    return start(request, "video", "Видео: " + b.prompt[:80], {"prompt": prompt, "ratio": b.ratio, "duration": b.duration, "image": img, "seed": b.seed, "negative": b.negative, "hd": b.resolution == "1080p"}, run, b.project_id,
+                 paid=("video", b.model_dump()))
 
 class SourceIn(BaseModel): asset_id: Optional[str] = None; url: Optional[str] = None; language: str = "ru"; focus: str = ""; project_id: Optional[int] = None
 @app.post("/api/tools/analyze")
@@ -630,12 +681,12 @@ def t_rec_plan(b: PlanIn, request: Request):
     p = b.model_dump(); pid = p.pop("project_id")
     return start(request, "recreate_plan", "План нового ролика", p, tools.recreate_plan, pid)
 
-class ProduceIn(BaseModel): plan: dict; ratio: str = "9:16"; voice: str = "ru-RU-SvetlanaNeural"; with_voice: bool = True; with_subs: bool = True; seed: Optional[int] = None; project_id: Optional[int] = None
+class ProduceIn(BaseModel): plan: dict; ratio: str = "9:16"; voice: str = "ru-RU-SvetlanaNeural"; with_voice: bool = True; with_subs: bool = True; seed: Optional[int] = None; project_id: Optional[int] = None; quote: str = ""
 @app.post("/api/tools/recreate/produce")
 def t_rec_prod(b: ProduceIn, request: Request):
-    p = b.model_dump(); pid = p.pop("project_id")
+    p = b.model_dump(); pid = p.pop("project_id"); p.pop("quote")
     def run(job, **kw): return tools.recreate_produce(job, uid=job.uid, **kw)
-    return start(request, "recreate", "Новый ролик: " + str(b.plan.get("title", ""))[:80], p, run, pid)
+    return start(request, "recreate", "Новый ролик: " + str(b.plan.get("title", ""))[:80], p, run, pid, paid=("recreate", b.model_dump()))
 
 class RenderIn(BaseModel): spec: dict; name: str = "Монтаж"; hd: bool = False; project_id: Optional[int] = None
 @app.post("/api/tools/editor/render")
@@ -660,7 +711,7 @@ def t_mux(b: MuxIn, request: Request):
 class PhotosIn(BaseModel):
     asset_ids: List[str]; idea: str = ""; ratio: str = "9:16"; per_clip: float = Field(4.0, ge=2, le=8); ai_motion: bool = True
     voiceover: str = ""; auto_voice: bool = False; voice: str = "ru-RU-SvetlanaNeural"; language: str = "ru"; subtitles: bool = True
-    captions: bool = False; music_id: Optional[str] = None; music_volume: float = Field(0.35, ge=0, le=1.5); transitions: bool = True; project_id: Optional[int] = None
+    captions: bool = False; music_id: Optional[str] = None; music_volume: float = Field(0.35, ge=0, le=1.5); transitions: bool = True; project_id: Optional[int] = None; quote: str = ""
 @app.post("/api/tools/photos_video")
 def t_photos(b: PhotosIn, request: Request):
     u = U(request)
@@ -669,8 +720,8 @@ def t_photos(b: PhotosIn, request: Request):
     for aid in b.asset_ids:
         a = get_asset(u["id"], aid)
         if not a or a["kind"] != "image": raise HTTPException(400, "Один из файлов не является фото.")
-    p = b.model_dump(); pid = p.pop("project_id")
-    return start(request, "photos_video", f"Видео из {len(b.asset_ids)} фото", p, tools.photos_video, pid)
+    p = b.model_dump(); pid = p.pop("project_id"); p.pop("quote")
+    return start(request, "photos_video", f"Видео из {len(b.asset_ids)} фото", p, tools.photos_video, pid, paid=("photos_video", b.model_dump()))
 
 class AutoIn(BaseModel): project_id: int; ratio: str = "9:16"
 @app.post("/api/tools/automontage")
@@ -704,6 +755,9 @@ def ask_clear(request: Request, project_id: int = 0):
 
 import sys as _sys, cloud
 cloud.install(app, _sys.modules[__name__])
+billing.install(app, _sys.modules[__name__])
+flow.install(app, _sys.modules[__name__])
+studio.install(app, _sys.modules[__name__])
 remote.install(app, _sys.modules[__name__])
 intel.install(app, _sys.modules[__name__])
 

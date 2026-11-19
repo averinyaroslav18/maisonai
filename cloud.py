@@ -83,11 +83,15 @@ def install(app, A):
     def render_prepare(b: RenderIn, request: Request):
         u = U(request)
         if A.CLOUD or not A.is_local(request): raise HTTPException(403, "Готовить облако можно только с самого компьютера.")
-        hf, gh = b.hf_token.strip(), b.gh_token.strip()
+        saved = P.load_secrets().get("_render") or {}
+        hf, gh = b.hf_token.strip() or saved.get("hf", ""), b.gh_token.strip() or saved.get("gh", "")
         if not re.fullmatch(r"hf_[A-Za-z0-9]{20,}", hf): raise HTTPException(400, "Вставьте токен Hugging Face целиком — он начинается с hf_")
         if not re.fullmatch(r"(ghp_|github_pat_)[A-Za-z0-9_]{20,}", gh): raise HTTPException(400, "Вставьте токен GitHub целиком — он начинается с ghp_")
         import hfspace
-        def run(job, migrate): return hfspace.prepare_job(job, hf, gh, migrate)
+        def run(job, migrate):
+            r = hfspace.prepare_job(job, hf, gh, migrate)
+            sec = P.load_secrets(); sec["_render"] = {"hf": hf, "gh": gh}; P.save_secrets(sec)   # для следующих обновлений (зашифровано на компьютере)
+            return r
         return {"job": core.submit(u["id"], "deploy", "Подготовка облака Render", {"migrate": b.migrate}, run)}
 
     class SaveUrlIn(BaseModel): url: str
@@ -120,6 +124,7 @@ def install(app, A):
         import hfspace
         return {"cloud": A.CLOUD, "cloud_url": c.get("cloud_url", ""), "cloud_host": c.get("cloud_host", ""), "deployed": c.get("cloud_deployed"),
                 "kind": c.get("cloud_kind", "server" if c.get("cloud_url") else ""), "repo": c.get("gh_repo", ""),
+                "tokens_saved": bool((P.load_secrets().get("_render") or {}).get("gh")) and not A.CLOUD,
                 "backup": {k: v for k, v in hfspace.STATE.items() if k in ("repo", "last", "error", "enabled", "restored")}}
 
 def import_zip(uid: int, path: Path) -> dict:

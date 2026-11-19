@@ -4,14 +4,17 @@ let orb = null;
 
 const ROUTES = {
   "": ["home", "Главная", "home"], assistant: ["assistant", "Ассистент", "chat"], script: ["script", "Сценарии", "script"],
-  voice: ["voice", "Голос", "mic"], image: ["image", "Изображения", "image"], video: ["video", "Видео", "film"],
-  recreate: ["recreate", "Воссоздание стиля", "layers"], analyze: ["analyze", "Анализ TikTok", "scan"], editor: ["editor", "Редактор", "cut"],
+  voice: ["voice", "Voice Lab", "mic"], image: ["image", "Изображения", "image"], video: ["video", "Видео", "film"],
+  recreate: ["recreate", "Video Recreator", "layers"], analyze: ["analyze", "Анализ TikTok", "scan"], editor: ["editor", "Smart Editor", "cut"],
+  flow: ["flow", "Maison Flow", "sparkles"], thumbs: ["thumbs", "Thumbnail Studio", "palette"], planner: ["planner", "Content Planner", "calendar"],
+  library: ["library", "Project Library", "library"], characters: ["characters", "Character Lab", "character"], trends: ["intel", "Trend Radar", "trend"],
   projects: ["projects", "Проекты", "folder"], project: ["projects", "Проект", "folder"], history: ["projects", "История", "clock"],
   favorites: ["projects", "Избранное", "star"], settings: ["settings", "Настройки", "gear"],
   intel: ["intel", "TikTok Intelligence", "radar"], menu: ["", "Ещё", "menu"],
 };
-const NAV = [["Студия", ["", "intel", "assistant"]], ["Создание", ["script", "voice", "image", "video", "editor"]], ["Библиотека", ["projects", "history", "favorites"]], ["", ["settings"]]];
-const TABBAR = ["", "intel", "assistant", "video", "menu"];
+const NAV = [["Студия", ["", "flow", "assistant"]], ["Создание", ["video", "image", "voice", "script", "thumbs", "editor"]],
+  ["Intelligence", ["intel", "recreate", "trends", "characters"]], ["Работа", ["planner", "library", "projects", "history"]], ["", ["settings"]]];
+const TABBAR = ["", "flow", "library", "intel", "menu"];
 const modules = {};
 let cleanup = null;
 
@@ -105,7 +108,7 @@ async function shell() {
   const nav = h("nav.nav", { "aria-label": "Разделы" });
   for (const [grp, keys] of NAV) {
     if (grp) nav.append(h("div.grp.mono-up", {}, grp));
-    for (const k of keys) nav.append(h("a", { href: "#/" + k, "data-r": k, class: k === "intel" ? "key" : "", style: { "--i": nav.children.length } }, icon(ROUTES[k][2]), h("span", {}, ROUTES[k][1]), k === "intel" ? h("span.pill", {}, "AI") : null));
+    for (const k of keys) nav.append(h("a", { href: "#/" + k, "data-r": k, class: k === "flow" ? "key" : "", style: { "--i": nav.children.length } }, icon(ROUTES[k][2]), h("span", {}, ROUTES[k][1]), k === "flow" ? h("span.pill", {}, "NEW") : null));
   }
   const initials = (state.user.display_name || state.user.username).trim()[0]?.toUpperCase() || "M";
   const side = h("aside.side", {}, logo(), nav, h("div.me", {}, h("div.av", {}, initials), h("div.nm", {}, state.user.display_name), btn("", logout, "ghost sm icon", "logout", { title: "Выйти", "aria-label": "Выйти" })));
@@ -124,7 +127,7 @@ async function shell() {
   const main = h("main", { id: "main" });
   const tabbar = h("nav.tabbar", { "aria-label": "Быстрые разделы" }, ...TABBAR.map(k => k === "menu"
     ? h("a", { href: "#", onclick: e => { e.preventDefault(); openDrawer(); } }, icon("menu"), "Ещё")
-    : h("a", { href: "#/" + k, "data-r": k }, icon(ROUTES[k][2]), k === "intel" ? "Intelligence" : ROUTES[k][1].split(" ")[0])));
+    : h("a", { href: "#/" + k, "data-r": k }, icon(ROUTES[k][2]), { intel: "Intelligence", flow: "Flow", library: "Библиотека", "": "Главная" }[k] ?? ROUTES[k][1].split(" ")[0])));
   setBody(h("div", { id: "app" }, side, top, main), tabbar, drawer);
   setProjectLabel();
   // таймкод активных задач (реальное время выполнения)
@@ -173,14 +176,15 @@ async function pickProject() {
 async function logout() { try { await api("/api/auth/logout", { body: {} }); } catch { } localStorage.removeItem("mai_project"); location.hash = "#/"; location.reload(); }
 
 async function route() {
-  const [k, arg] = location.hash.replace(/^#\/?/, "").split("/");
+  let [k, arg] = location.hash.replace(/^#\/?/, "").split("/");
+  if (k === "trends") arg = "trends";
   const r = ROUTES[k] ?? ROUTES[""];
-  $$("[data-r]").forEach(a => a.classList.toggle("on", a.dataset.r === k || (k === "project" && a.dataset.r === "projects") || (["analyze", "recreate"].includes(k) && a.dataset.r === "intel")));
+  $$("[data-r]").forEach(a => a.classList.toggle("on", a.dataset.r === k || (k === "project" && a.dataset.r === "projects") || (k === "analyze" && a.dataset.r === "intel") || (k === "intel" && arg === "trends" && a.dataset.r === "trends")));
   $(".crumb").textContent = r[1];
   document.title = r[1] + " · MaisonAI";
   if (cleanup) { try { cleanup(); } catch { } cleanup = null; }
   const main = $("#main"); main.scrollTop = 0;
-  const page = h("div.page"); main.replaceChildren(page);
+  const page = h("div.page.enter"); main.replaceChildren(page);
   try {
     if (r[0] === "home") cleanup = await home(page);
     else {
@@ -191,39 +195,66 @@ async function route() {
 }
 
 // ---------- главная ----------
+const TOOLS = [
+  ["Создание", [["flow", "Maison Flow", "Одна идея → концепция, раскадровка, сцены, озвучка, MP4", "sparkles", "big"], ["video", "Видео", "Текст, картинка или много фото → ролик", "film"],
+    ["image", "Изображения", "Генерация и правка отдельных элементов", "image"], ["voice", "Voice Lab", "Голоса, эмоции, скорость, предпрослушивание", "mic"],
+    ["script", "Сценарии", "Хук, текст, сцены, хештеги", "script"], ["thumbs", "Thumbnail Studio", "Обложки TikTok, Reels, Shorts", "palette"], ["editor", "Smart Editor", "Таймлайн, субтитры, музыка, экспорт", "cut"]]],
+  ["Intelligence", [["intel", "TikTok Intelligence", "Разбор роликов: монтаж, хук, сценарий, Visual DNA", "radar"], ["recreate", "Video Recreator", "Своя оригинальная версия по референсу", "layers"],
+    ["trends", "Trend Radar", "Тренды по вашим референсам — с датой и источником", "trend"], ["characters", "Character Lab", "Свои персонажи для всех сцен", "character"]]],
+  ["Работа", [["planner", "Content Planner", "Календарь идей и публикаций", "calendar"], ["library", "Project Library", "Всё созданное: поиск, папки, избранное", "library"]]]];
+
+function tilt(el) {   // карточки слегка поворачиваются за курсором (только мышь)
+  el.addEventListener("pointermove", e => { if (e.pointerType !== "mouse") return; const r = el.getBoundingClientRect(); el.style.setProperty("--rx", ((e.clientY - r.top) / r.height - .5) * -6 + "deg"); el.style.setProperty("--ry", ((e.clientX - r.left) / r.width - .5) * 8 + "deg"); el.style.setProperty("--mx", (e.clientX - r.left) + "px"); el.style.setProperty("--my", (e.clientY - r.top) + "px"); });
+  el.addEventListener("pointerleave", () => { el.style.setProperty("--rx", "0deg"); el.style.setProperty("--ry", "0deg"); });
+  return el;
+}
+
 async function home(page) {
   const hr = new Date().getHours();
   const greet = hr < 5 ? "Доброй ночи" : hr < 12 ? "Доброе утро" : hr < 18 ? "Добрый день" : "Добрый вечер";
-  const ta = h("textarea", { placeholder: "Например: «Хочу вирусный ролик про путешествия» или «Сделай видео в стиле этого ролика, но в чёрном костюме и другом городе»", "aria-label": "Что создаём сегодня?" });
-  const send = () => { const v = ta.value.trim(); if (!v) { ta.focus(); return; } handoff.set("ask", v); go("#/assistant"); };
-  ta.onkeydown = e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(); };
-  const quick = [["intel/analyze", "TikTok Intelligence", "Загрузите примеры — MaisonAI изучит стиль, соберёт Visual DNA и поможет снять новое", "radar", "wide"],
-    ["intel/dna", "Visual DNA", "Профили стилей для повторного использования", "dna"],
-    ["video", "Видео", "Текст или картинка → ролик 9:16", "film"], ["image", "Изображение", "Генерация и правка: одежда, причёска, фон", "image"],
-    ["script", "Сценарий", "Хук, текст озвучки, сцены, хештеги", "script"], ["voice", "Озвучка", "Украинские, русские и другие голоса", "mic"],
-    ["editor", "Редактор", "Обрезка, склейка, субтитры, экспорт", "cut"]];
+  const ta = h("textarea", { rows: 2, placeholder: "Одна идея — например: «Три ошибки новичков в зале, которые съедают прогресс»", "aria-label": "Идея ролика" });
+  const toFlow = () => { const v = ta.value.trim(); if (!v) { ta.focus(); return; } handoff.set("flow_idea", v); go("#/flow"); };
+  const toAsk = () => { const v = ta.value.trim(); if (!v) { ta.focus(); return; } handoff.set("ask", v); go("#/assistant"); };
+  ta.onkeydown = e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) toFlow(); };
+  const word = "MAISONAI";
   const counters = h("div.counters", {}, ...["Проекты", "Видео", "Изображения", "Озвучки", "Сценарии"].map(l => h("div", {}, h("b", {}, "—"), h("span.mono-up", {}, l))));
-  const recent = h("div.list", {}, h("div.dim", {}, "Загрузка…"));
-  const caps = h("div.caps");
+  const flows = h("div.flow-row"), recent = h("div.list", {}, h("div.dim", {}, "Загрузка…")), caps = h("div.caps"), spend = h("div");
+  page.classList.add("home");
   page.append(
-    h("div.hero", {}, h("div", {},
-      h("div.hello", {}, h("h1", {}, `${greet},`, h("br"), state.user.display_name), h("span.sub", {}, new Date().toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" }))),
-    h("div.prompt-box", {}, h("div.mono-up", { style: { padding: "16px 22px 0" } }, "Что создаём сегодня?"), ta,
-      h("div.pbar", {}, h("span.dim", { style: { fontSize: "12px" } }, "Ассистент разберёт задачу и предложит шаги"), h("div", { style: { flex: "1" } }), btn("Начать", send, "pri", "arrow")))),
+    h("section.home-hero", {},
+      h("div.hh-text", {},
+        h("div.mono-up", {}, `${greet}, ${state.user.display_name} · ${new Date().toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" })}`),
+        h("h1.wordmark", { "aria-label": "MaisonAI" }, ...[...word].map((ch, i) => h("span", { class: i >= 6 ? "ai" : "", style: { "--i": i } }, ch))),
+        h("p.lead", {}, "AI Creative Studio для TikTok, Reels и Shorts: от одной идеи до готового MP4."),
+        h("div.prompt-box.glass", {}, ta, h("div.pbar", {}, h("span.dim", { style: { fontSize: "12px" } }, "Ctrl + Enter — сразу во Flow"), h("div", { style: { flex: "1" } }),
+          btn("Спросить ассистента", toAsk, "ghost sm", "chat"), btn("Создать ролик", toFlow, "pri", "sparkles")))),
       h("div.orb-slot", { "data-orb": "hero", "aria-hidden": "true" })),
-    h("div.tiles", {}, ...quick.map(([r, n, d, ic, w], i) => h("a.tile" + (w ? ".wide" : ""), { href: "#/" + r, style: { "--i": i } }, icon(ic), h("span.n", {}, n), h("p", {}, d), icon("arrow", "ix")))),
-    h("div.dash", {},
-      h("div.col", {}, counters, h("div.panel", {}, h("div.row", { style: { marginBottom: "6px" } }, h("h3", { style: { margin: 0, flex: 1 } }, "Последние проекты"), btn("Все", () => go("#/projects"), "sm ghost")), recent)),
-      h("div.panel", {}, h("h3", {}, "Подключённые модели"), caps, btn("Настроить", () => go("#/settings/providers"), "sm wide", "gear", { style: { marginTop: "12px" } }))));
+    ...TOOLS.map(([grp, items], gi) => h("section.tool-sec", {}, h("div.sec-h", {}, h("span.mono-up", {}, String(gi + 1).padStart(2, "0")), h("h2", {}, grp)),
+      h("div.tool-grid", {}, ...items.map(([r, n, d, ic, cls], i) => tilt(h("a.tool" + (cls ? "." + cls : ""), { href: "#/" + r, style: { "--i": i + gi * 3 } },
+        h("span.glare"), h("span.ti", {}, icon(ic)), h("span.tn", {}, n), h("span.td", {}, d), icon("arrow", "ix"))))))),
+    h("section.tool-sec", {}, h("div.sec-h", {}, h("span.mono-up", {}, "04"), h("h2", {}, "Последнее"), h("div", { style: { flex: 1 } }), btn("Все Flow", () => go("#/flow"), "sm ghost"), btn("Библиотека", () => go("#/library"), "sm ghost")),
+      flows,
+      h("div.dash", {},
+        h("div.col", {}, counters, h("div.panel.glass", {}, h("h3", {}, "Недавние проекты"), recent)),
+        h("div.col", {}, h("div.panel.glass", {}, h("h3", {}, "Расходы"), spend), h("div.panel.glass", {}, h("h3", {}, "Подключённые модели"), caps, btn("Настроить", () => go("#/settings/providers"), "sm wide", "gear", { style: { marginTop: "12px" } }))))));
   api("/api/stats").then(s => { const v = [s.projects, s.videos, s.images, s.audio, s.scripts]; $$("b", counters).forEach((b, i) => fx.countUp(b, v[i])); }).catch(() => { });
+  api("/api/flow").then(fs => flows.replaceChildren(...(fs.length ? fs.slice(0, 6).map((f, i) => h("a.flow-card", { href: "#/flow/" + f.id, style: { "--i": i } },
+    h("div.fc-cover", { style: { backgroundImage: f.cover_url ? `url("${f.cover_url}")` : "" } }, f.final ? h("span.tag.ok", {}, "MP4") : null),
+    h("div.fc-body", {}, h("b", {}, f.title), h("span.dim", {}, `${f.ready}/${f.scenes} сцен · ${fmtDate(f.updated)}`))))
+    : [h("a.flow-card.empty-card", { href: "#/flow" }, h("div.fc-cover", {}, icon("sparkles")), h("div.fc-body", {}, h("b", {}, "Первый ролик"), h("span.dim", {}, "Начните с одной идеи")))]))).catch(() => { });
   api("/api/projects").then(ps => {
-    recent.replaceChildren(...(ps.length ? ps.slice(0, 6).map(p => h("div.it", { onclick: () => go("#/project/" + p.id) }, h("div.th", { style: { backgroundImage: p.cover_url ? `url("${p.cover_url}")` : "" } }),
-      h("div.t", {}, p.title), h("span.dim", {}, `${p.n_assets} файлов · ${fmtDate(p.updated)}`))) : [h("div.empty", {}, "Проектов пока нет. Создайте первый в верхней панели.")]));
+    recent.replaceChildren(...(ps.length ? ps.slice(0, 6).map(p => h("div.it", { onclick: () => go(p.kind === "flow" ? "#/flow/" + p.id : "#/project/" + p.id) }, h("div.th", { style: { backgroundImage: p.cover_url ? `url("${p.cover_url}")` : "" } }),
+      h("div.t", {}, p.title), h("span.dim", {}, `${p.n_assets} файлов · ${fmtDate(p.updated)}`))) : [h("div.empty", {}, "Проектов пока нет.")]));
   }).catch(e => recent.replaceChildren(h("div.err", {}, e.message)));
+  api("/api/costs").then(r => {
+    const usd = v => "$" + Number(v || 0).toFixed(2);
+    spend.replaceChildren(h("div.meter", {}, h("div.row", { style: { justifyContent: "space-between" } }, h("span.muted", {}, "Сегодня"), h("b", {}, `${usd(r.spent.day)} / ${usd(r.budget.daily)}`)),
+      h("div.bar", {}, h("i", { style: { width: Math.min(100, r.budget.daily ? r.spent.day / r.budget.daily * 100 : 0) + "%" } }))),
+      h("p.dim", { style: { fontSize: "12px", marginTop: "8px" } }, "Платное — только после вашего подтверждения цены."), btn("Журнал и бюджет", () => go("#/settings/costs"), "sm ghost", "wallet"));
+  }).catch(() => spend.replaceChildren(h("div.dim", {}, "—")));
   loadProviders(true).then(s => {
     caps.replaceChildren(...["text", "image", "image_edit", "tts", "video", "video_understanding", "stt"].map(c => h("div.cap", {}, h("span.muted", {}, s.cap_labels[c]), providerBadge(c))));
   }).catch(() => { });
-  setTimeout(() => ta.focus(), 100);
 }
 
 import * as lib from "./lib.js";

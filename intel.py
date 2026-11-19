@@ -362,7 +362,7 @@ def install(app, A):
     @app.get("/api/intel/videos/{iid}")
     def video(iid: str, request: Request): return pub_video(own("intel_videos", iid, U(request)["id"]))
 
-    class Patch(BaseModel): title: Optional[str] = None; name: Optional[str] = None; favorite: Optional[bool] = None; data: Optional[dict] = None; dna: Optional[dict] = None; sheet: Optional[dict] = None
+    class Patch(BaseModel): title: Optional[str] = None; name: Optional[str] = None; favorite: Optional[bool] = None; data: Optional[dict] = None; dna: Optional[dict] = None; sheet: Optional[dict] = None; image: Optional[str] = None
 
     @app.patch("/api/intel/videos/{iid}")
     def video_patch(iid: str, b: Patch, request: Request):
@@ -483,11 +483,12 @@ def install(app, A):
         with db() as c: c.execute("DELETE FROM blueprints WHERE id=?", (bid,))
         return {"ok": True}
 
-    class ProduceIn(BaseModel): voice: str = "ru-RU-SvetlanaNeural"; with_voice: bool = True; with_subs: bool = True; ratio: Optional[str] = None; project_id: Optional[int] = None
+    class ProduceIn(BaseModel): voice: str = "ru-RU-SvetlanaNeural"; with_voice: bool = True; with_subs: bool = True; ratio: Optional[str] = None; project_id: Optional[int] = None; quote: str = ""
     @app.post("/api/intel/blueprints/{bid}/produce")
     def bp_produce(bid: str, b: ProduceIn, request: Request):
         r = own("blueprints", bid, U(request)["id"])
-        return A.start(request, "recreate", "Ролик: " + r["title"][:80], {"blueprint_id": bid, "voice": b.voice, "with_voice": b.with_voice, "with_subs": b.with_subs, "ratio": b.ratio}, produce, b.project_id)
+        return A.start(request, "recreate", "Ролик: " + r["title"][:80], {"blueprint_id": bid, "voice": b.voice, "with_voice": b.with_voice, "with_subs": b.with_subs, "ratio": b.ratio}, produce, b.project_id,
+                       paid=("intel_produce", {**b.model_dump(), "blueprint_id": bid}))
 
     # персонажи
     class CharIn(BaseModel): name: str; sheet: dict = {}; image: Optional[str] = None; source: str = ""
@@ -513,6 +514,10 @@ def install(app, A):
         with db() as c:
             if b.name is not None: c.execute("UPDATE characters SET name=? WHERE id=?", (b.name.strip()[:60] or r["name"], cid))
             if b.sheet is not None: c.execute("UPDATE characters SET sheet=? WHERE id=?", (json.dumps(b.sheet, ensure_ascii=False), cid))
+            img = getattr(b, "image", None)
+            if img is not None:
+                if img and not get_asset(u["id"], img): raise HTTPException(400, "Картинка не найдена")
+                c.execute("UPDATE characters SET image=? WHERE id=?", (img or None, cid))
         return {"ok": True}
 
     @app.delete("/api/intel/characters/{cid}")

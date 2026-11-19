@@ -18,6 +18,9 @@ export async function api(path, opt = {}) {
   const ct = r.headers.get("content-type") || "";
   const data = ct.includes("json") ? await r.json() : await r.text();
   if (!r.ok) {
+    if (r.status === 409 && data && data.detail && data.detail.need_confirm) {   // платная операция: нужна явная оплата
+      const e = new Error("Нужно подтвердить цену"); e.confirm = data.detail; throw e;
+    }
     let msg = typeof data === "string" ? data : data.detail;
     if (Array.isArray(msg)) msg = "Проверьте заполнение полей: " + msg.map(e => (e.loc || []).slice(-1)[0]).join(", ");
     throw new Error(msg || `Ошибка ${r.status}`);
@@ -123,9 +126,35 @@ export function waitJob(id) {
   });
 }
 // Запуск инструмента + карточка прогресса в указанном месте страницы
+// ---------- цена перед платной операцией ----------
+const usd = v => "$" + (v < 1 && Math.round(v * 100) !== v * 100 ? Number(v).toFixed(3) : Number(v).toFixed(2));
+export function confirmCost(d) {
+  return new Promise(res => {
+    let m;
+    const rows = d.items.map(i => h("tr", {}, h("td", {}, i.what), h("td.dim", {}, i.label), h("td.num", {}, `${Number(i.units).toLocaleString("ru-RU")} ${({ second: "с", seconds: "с", megapixel: "Мп", image: "шт", images: "шт", video: "шт" })[i.unit] || i.unit}`), h("td.num", {}, usd(i.usd))));
+    const b = d.budget || {};
+    const body = h("div.col.cost-box", {},
+      h("div.cost-total", {}, h("span", {}, "Итого"), h("b", {}, usd(d.total))),
+      h("table.cost-table", {}, h("tbody", {}, ...rows)),
+      h("div.row.dim", { style: { fontSize: "12px", gap: "14px", flexWrap: "wrap" } },
+        h("span", {}, `Сегодня потрачено ${usd(b.spent_day || 0)} из ${usd(b.daily || 0)}`), h("span", {}, `За месяц ${usd(b.spent_month || 0)} из ${usd(b.monthly || 0)}`)),
+      d.blocked ? h("div.note.warn", {}, d.blocked) : h("p.dim", { style: { fontSize: "12px" } }, d.note + " Источник цены: " + (d.items[0]?.source || "")));
+    const ok = btn(`Подтвердить ${usd(d.total)}`, () => { m.close(); res(true); }, "pri", "check", { disabled: !!d.blocked });
+    m = modal("Платная операция", body, { foot: [btn("Отмена", () => { m.close(); res(false); }), ok], onClose: () => res(false) });
+  });
+}
+export async function paidApi(path, opt = {}) {   // любой запрос, который может оказаться платным
+  try { return await api(path, opt); }
+  catch (e) {
+    if (!e.confirm) throw e;
+    if (!(await confirmCost(e.confirm))) throw new Error("Отменено — ничего не списано.");
+    return api(path, { ...opt, body: { ...(opt.body || {}), quote: e.confirm.quote } });
+  }
+}
+
 export async function runTool(path, body, box, title) {
   if (state.project && body.project_id === undefined) body.project_id = state.project.id;
-  const { job } = await api(path, { body });
+  const { job } = await paidApi(path, { body });
   trackJob(job, title);
   if (box) jobCard(box, job, title);
   return waitJob(job);

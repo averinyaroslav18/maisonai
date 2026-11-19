@@ -30,7 +30,7 @@ export async function render(page) {
   const plib = btn("Из библиотеки", async () => { const a = await pickAsset(["image"], "Фото"); if (a && photos.length < 20) { photos.push(a); drawPhotos(); } }, "sm ghost", "folder");
   const idea = h("textarea.in", { rows: 3, placeholder: "О чём ролик? Например: наша поездка в горы — весело и тепло. ИИ сам придумает, как оживить каждое фото." });
   const pratio = segmented(RATIOS, "9:16");
-  const perClip = select([[3, "3 с"], [4, "4 с"], [5, "5 с"]], "4", { onchange: () => drawPhotos() });
+  const perClip = select([[3, "3 с — больше оживлённых фото"], [4, "4 с"], [5, "5 с"]], "3", { onchange: () => drawPhotos() });
   const aiMotion = h("input", { type: "checkbox", checked: realAI, disabled: !realAI });
   const voMode = segmented([["none", "Без голоса"], ["auto", "ИИ напишет текст"], ["text", "Свой текст"]], "auto", v => voText.classList.toggle("hidden", v !== "text"));
   const voText = h("textarea.in.hidden", { rows: 3, placeholder: "Текст озвучки" });
@@ -42,7 +42,7 @@ export async function render(page) {
     : btn("Добавить музыку", async () => { const a = await pickAsset(["audio"], "Музыка"); if (a) { music = a; drawMusic(); } }, "sm ghost", "volume"));
   drawMusic();
   const photosPanel = h("div.col", {},
-    h("div", { class: realAI ? "note" : "note warn" }, realAI ? "Каждое фото оживёт настоящей нейросетью Wan 2.2: двигаются люди, волосы, одежда, вода, свет. Бесплатно ≈5–8 фото в день; если лимит кончится, остальные фото соберутся динамичным монтажом."
+    h("div", { class: realAI ? "note" : "note warn" }, realAI ? "Каждое фото оживёт настоящей нейросетью Wan 2.2: двигаются люди, волосы, одежда, вода, свет. Бесплатно ≈10 фото по 3 секунды в день на один аккаунт Hugging Face; если лимит кончится, остальные фото соберутся динамичным монтажом."
       : "Сейчас фото соберутся динамичным монтажом с переходами. Чтобы фото по-настоящему оживали (двигались люди и предметы), подключите бесплатный Hugging Face: Настройки → Провайдеры → «Hugging Face · Wan 2.2»."),
     pzone, h("div.row", {}, plib, pcount), pgrid, field("Идея ролика", idea), h("div.grid2", {}, field("Секунд на фото", perClip), field("Формат", pratio)),
     h("label.row", {}, aiMotion, "Оживить фото нейросетью" + (realAI ? "" : " (нужен Hugging Face или ComfyUI)")),

@@ -1,5 +1,5 @@
 // Кэшируем только оболочку интерфейса; данные и файлы всегда берутся с компьютера.
-const V = "mai-v9";
+const V = "mai-v12";
 const SHELL = ["/", "/app.css", "/js/app.js", "/js/lib.js", "/js/fx.js", "/js/orb.js", "/js/icons.js", "/vendor/three.module.min.js", "/vendor/RoomEnvironment.js", "/fonts/inter-var.woff2", "/fonts/plexmono-Regular.woff2", "/fonts/plexmono-Medium.woff2", "/fonts/plexmono-SemiBold.woff2"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });

@@ -1,18 +1,18 @@
-import { state, api, h, icon, btn, fail, toast, go, field, select, segmented, RATIOS, LANGS, loadProviders, confirmBox, modal, runTool, download, copy } from "./lib.js";
+import { state, api, h, icon, btn, fail, toast, go, field, select, segmented, RATIOS, LANGS, loadProviders, confirmBox, modal, runTool, download, copy, fmtDate } from "./lib.js";
 
-const COST = { free: ["бесплатно", "free"], free_quota: ["бесплатный лимит", "free"], local: ["на вашем компьютере", "free"], paid_credits: ["платные кредиты", "paid"], unknown: ["зависит от сервера", ""] };
+const COST = { free: ["бесплатно", "free"], free_quota: ["бесплатный лимит", "free"], local: ["на вашем компьютере", "free"], paid_credits: ["платные кредиты", "paid"], paid: ["платно · цена до запуска", "paid"], unknown: ["зависит от сервера", ""] };
 const MODEL_CAPS = { gemini: ["text"], groq: ["text"], openrouter: ["text", "vision"], cloudflare: ["text", "vision", "image"], ollama: ["text", "vision"], custom: ["text", "vision"], pollinations: ["text", "image", "video"] };
 const CAP_MODEL_LBL = { text: "Модель для текста", vision: "Модель для картинок (зрение)", image: "Модель картинок", video: "Модель видео" };
 
 export async function render(page, _k, tab) {
   tab = tab || "providers";
-  const tabs = h("div.tabs", { role: "tablist" }, ...[["providers", "Провайдеры ИИ"], ["cloud", "Облако"], ["devices", "iPad и MacBook"], ["comfy", "ComfyUI"], ["profile", "Профиль"], ["account", "Аккаунт"]].map(([id, l]) =>
+  const tabs = h("div.tabs", { role: "tablist" }, ...[["providers", "Провайдеры ИИ"], ["costs", "Расходы"], ["cloud", "Облако"], ["devices", "iPad и MacBook"], ["comfy", "ComfyUI"], ["profile", "Профиль"], ["account", "Аккаунт"]].map(([id, l]) =>
     h("button", { type: "button", class: id === tab ? "on" : "", role: "tab", onclick: () => go("#/settings/" + id) }, l)));
   const body = h("div");
   const ver = h("span.dim", { style: { fontSize: "12px", marginLeft: "12px" } });
   api("/api/info").then(r => ver.textContent = "версия " + r.version).catch(() => { });
   page.append(h("div.ph", {}, h("h1", {}, "Настройки", ver)), tabs, body);
-  const f = { providers, cloud, comfy, devices, profile, account }[tab] || providers;
+  const f = { providers, costs, cloud, comfy, devices, profile, account }[tab] || providers;
   return f(body);
 }
 
@@ -31,7 +31,7 @@ async function providers(body) {
     capRows.push(h("div.capsel", {}, h("span", {}, s.cap_labels.video_understanding), h("span.dim", { style: { fontSize: "12px" } }, "Только Google Gemini умеет смотреть видео целиком. Без него анализ идёт по кадрам (если подключено «зрение»)."),
       s.active.video_understanding ? h("span.tag.ok", {}, "работает") : h("span.tag.off", {}, "нужен ключ Gemini")));
     body.replaceChildren(
-      !local ? h("div.note.warn", { style: { marginBottom: "16px" } }, "Вы открыли MaisonAI с другого устройства. Ключи и провайдеров можно менять только на самом компьютере — так ключи не передаются по сети.") : null,
+      !local ? h("div.note.warn", { style: { marginBottom: "16px" } }, "Ключи и провайдеров меняет владелец — первый аккаунт MaisonAI. Войдите под ним на любом устройстве.") : null,
       h("div.note", { style: { marginBottom: "16px" } }, "MaisonAI по умолчанию работает без ключей: текст и картинки — через бесплатный Pollinations (медленно, с паузами), голос — Microsoft Edge, видео — монтаж из кадров. Для скорости и качества подключите бесплатные ключи Gemini, Groq и Cloudflare. Платные сервисы без вашего выбора не используются."),
       h("div.panel", {}, h("div.row", { style: { marginBottom: "10px" } }, h("h3", { style: { margin: 0, flex: 1 } }, "Что чем делается"),
         s.auto_best !== false ? h("span.tag.ok", {}, "автонастройка включена") : null,
@@ -72,6 +72,7 @@ async function providers(body) {
         h("div", { style: { flex: 1 } }), p.signup ? h("a.btn.sm.ghost", { href: p.signup, target: "_blank", rel: "noopener" }, icon("link"), p.needs.includes("key") ? "Получить ключ" : "Сайт") : null),
       h("p.lim", {}, p.limits),
       id === "cloudflare" ? h("p.lim", {}, "Как подключить: dash.cloudflare.com → Workers AI → «Use REST API» → создайте токен «Workers AI» и скопируйте Account ID.") : null,
+      id === "hf_spaces" ? h("p.lim", {}, "Можно вставить несколько токенов через пробел — например ваш и сестры. Когда у одного кончится дневной лимит, программа сама возьмёт следующий. Только настоящие аккаунты разных людей: заводить несколько аккаунтов на одного человека Hugging Face запрещает и может заблокировать.") : null,
       id === "pollinations" ? h("div.row", { style: { marginBottom: "8px" } }, btn("Цены моделей", () => prices(), "sm ghost", "eye")) : null,
       inputs.length ? h("div.grid2", {}, ...inputs) : null,
       h("div.row", { style: { marginTop: "10px" } }, inputs.length ? saveKey : null, test,
@@ -220,8 +221,8 @@ async function cloud(body) {
   }
   // ---------- Render: без карты ----------
   const L2 = (href, text) => h("a", { href, target: "_blank", rel: "noopener", style: { textDecoration: "underline" } }, text);
-  const hfTok = h("input.in", { type: "password", placeholder: "hf_…", autocomplete: "off", spellcheck: false });
-  const ghTok = h("input.in", { type: "password", placeholder: "ghp_…", autocomplete: "off", spellcheck: false });
+  const hfTok = h("input.in", { type: "password", placeholder: st.tokens_saved ? "сохранён — можно не вводить" : "hf_…", autocomplete: "off", spellcheck: false });
+  const ghTok = h("input.in", { type: "password", placeholder: st.tokens_saved ? "сохранён — можно не вводить" : "ghp_…", autocomplete: "off", spellcheck: false });
   const rMigrate = h("input", { type: "checkbox", checked: true });
   const rOut = h("div");
   const renderUrl = h("input.in", { placeholder: "https://maisonai-xxxx.onrender.com", value: st.kind === "render" ? st.cloud_url || "" : "" });
@@ -240,7 +241,7 @@ async function cloud(body) {
         bt.disabled = false; }, "sm pri", "check"))),
     h("p.dim", { style: { fontSize: "12px" } }, "Обновить программу в облаке: нажмите «Подготовить облако» ещё раз, затем в Render — «Manual Deploy» → «Deploy latest commit»."));
   const rGo = btn(st.kind === "render" ? "Подготовить облако ещё раз (обновить)" : "Подготовить облако", async () => {
-    if (!hfTok.value.trim() || !ghTok.value.trim()) return toast("Вставьте оба токена", true);
+    if (!st.tokens_saved && (!hfTok.value.trim() || !ghTok.value.trim())) return toast("Вставьте оба токена", true);
     rGo.disabled = true;
     try {
       const r = await runTool("/api/cloud/render/prepare", { hf_token: hfTok.value.trim(), gh_token: ghTok.value.trim(), migrate: rMigrate.checked }, rOut, "Подготовка облака");
@@ -258,7 +259,7 @@ async function cloud(body) {
     h("div.panel.col", {}, h("h3", { style: { margin: 0 } }, "Render · бесплатно, без карты"),
       !state.local ? h("div.note.warn", {}, "Готовить облако можно только с самого компьютера.") : null,
       field("Токен Hugging Face (Write)", hfTok), field("Токен GitHub", ghTok), h("label.row", {}, rMigrate, "Перенести мои проекты, файлы и ключи ИИ"), rGo,
-      h("p.dim", { style: { fontSize: "12px" } }, "Токены не сохраняются на компьютере и в истории."),
+      h("p.dim", { style: { fontSize: "12px" } }, "Токены хранятся только на этом компьютере в зашифрованном виде (для обновлений облака) и не попадают в историю."),
       rOut, st.kind === "render" && st.repo ? renderSteps(st.repo) : null));
   const ip = h("input.in", { placeholder: "Например: 140.238.12.34", inputMode: "decimal", value: st.cloud_host || "" });
   const user = h("input.in", { value: "ubuntu" });
@@ -349,4 +350,44 @@ async function account(body) {
         if (!await confirmBox("Точно удалить аккаунт и все данные?")) return;
         try { await api("/api/account?password=" + encodeURIComponent(pw.value), { method: "DELETE" }); location.hash = "#/"; location.reload(); } catch (e) { fail(e); }
       }, "danger", "trash"))));
+}
+
+// ---------- Расходы: бюджет, модели fal.ai, журнал, счётчик запросов ----------
+const USD = v => "$" + (Math.abs(v) < 0.1 && v !== 0 ? Number(v).toFixed(3) : Number(v || 0).toFixed(2));
+async function costs(body) {
+  const [r, pr, st] = await Promise.all([api("/api/costs"), api("/api/costs/prices"), api("/api/settings/providers")]);
+  const b = r.budget, sp = r.spent, edit = r.can_edit;
+  const inp = (v) => h("input.in", { type: "number", min: 0, max: 1000, step: 0.5, value: v, disabled: !edit });
+  const daily = inp(b.daily), monthly = inp(b.monthly), maxJob = inp(b.max_job);
+  const meter = (label, used, lim) => h("div.meter", {}, h("div.row", { style: { justifyContent: "space-between" } }, h("span", {}, label), h("b", {}, `${USD(used)} / ${USD(lim)}`)),
+    h("div.bar", {}, h("i", { style: { width: Math.min(100, lim > 0 ? used / lim * 100 : 100) + "%" } })));
+  const falOn = st.providers.fal?.configured;
+  const kinds = [["video", "Видео (картинка → видео)"], ["image", "Картинки"], ["image_edit", "Правка картинок"]];
+  const unitRu = u => ({ second: "за секунду", megapixel: "за мегапиксель", image: "за картинку", video: "за ролик" })[u] || u;
+  const modelSel = kind => field(kinds.find(k => k[0] === kind)[1], select(pr.models.filter(m => m.kind === kind).map(m => [m.id, `${m.label} — ${USD(m.live ? m.live[0] : m.price)} ${unitRu(m.live ? m.live[1] : m.unit)}`]), pr.selected[kind],
+    { disabled: !edit, onchange: async e => { try { await api("/api/settings/providers", { body: { models: { ["fal:" + kind]: e.target.value } } }); toast("Модель сохранена"); } catch (x) { fail(x); } } }));
+  const useSel = cap => {
+    const opts = Object.entries(st.providers).filter(([, p]) => p.caps.includes(cap) && p.configured).map(([id, p]) => [id, p.label]);
+    return select(opts, st.use[cap] || "", { disabled: !edit, onchange: async e => { try { await api("/api/settings/providers", { body: { use: { [cap]: e.target.value } } }); toast(e.target.value === "fal" ? "Включено. Перед каждым запуском будет цена и подтверждение." : "Сохранено"); } catch (x) { fail(x); } } });
+  };
+  const st_ = { charged: ["ok", "оплачено"], running: ["", "идёт"], failed: ["off", "не выполнено · не оплачено"], unknown: ["warn", "неизвестно"] };
+  body.replaceChildren(
+    h("div.note", { style: { marginBottom: "16px" } }, "Платные модели запускаются только после того, как вы увидели цену и нажали «Подтвердить». Сама программа на платное не переключается — только на бесплатное, если платный сервис недоступен. Бюджет проверяется до запуска: выйти за лимит нельзя."),
+    h("div.grid2", {},
+      h("div.panel.col", {}, h("h3", { style: { margin: 0 } }, "Бюджет"),
+        meter("Сегодня", sp.day, b.daily), meter("Этот месяц", sp.month, b.monthly),
+        h("div.grid3", {}, field("В день, $", daily), field("В месяц, $", monthly), field("На одну задачу, $", maxJob)),
+        edit ? btn("Сохранить бюджет", async () => { try { await api("/api/costs/budget", { body: { daily: +daily.value, monthly: +monthly.value, max_job: +maxJob.value } }); toast("Бюджет сохранён"); costs(body); } catch (x) { fail(x); } }, "pri", "check") : h("div.dim", {}, "Бюджет меняет владелец.")),
+      h("div.panel.col", {}, h("h3", { style: { margin: 0 } }, "fal.ai — платные модели"),
+        falOn ? h("div.note", {}, "Ключ fal.ai подключён.") : h("div.note.warn", {}, "Ключ fal.ai не подключён: Провайдеры ИИ → fal.ai → вставьте ключ с fal.ai/dashboard/keys. Без ключа платные модели не используются."),
+        ...kinds.map(([k]) => modelSel(k)),
+        falOn ? h("div.col", { style: { gap: "8px" } }, h("b", {}, "Где использовать"), field("Видео", useSel("video")), field("Картинки", useSel("image")), field("Правка картинок", useSel("image_edit"))) : null,
+        h("p.dim", { style: { fontSize: "12px" } }, `Цены: ${pr.models.some(m => m.live) ? "живые, с fal.ai" : "каталог MaisonAI, проверено " + pr.checked}. fal.ai берёт деньги только за успешно созданные файлы.`))),
+    h("div.panel.col", { style: { marginTop: "16px" } }, h("h3", { style: { margin: 0 } }, "Журнал платных запросов"),
+      r.rows.length ? h("div.tbl-wrap", {}, h("table.cost-table", {}, h("thead", {}, h("tr", {}, ...["Когда", "Задача", "Модель", "Объём", "Сумма", "Статус"].map(t => h("th", {}, t)))),
+        h("tbody", {}, ...r.rows.map(x => h("tr", {}, h("td", {}, fmtDate(x.created)), h("td", {}, x.job_title || x.what), h("td.dim", {}, x.model.split("/").slice(1, 3).join("/")),
+          h("td.num", {}, `${x.units} ${x.unit}`), h("td.num", {}, USD(x.usd)), h("td", {}, h("span.tag." + (st_[x.status]?.[0] || ""), { title: x.note || "" }, st_[x.status]?.[1] || x.status))))))) : h("div.dim", {}, "Платных запросов ещё не было.")),
+    h("div.panel.col", { style: { marginTop: "16px" } }, h("h3", { style: { margin: 0 } }, "Счётчик запросов к ИИ"),
+      r.calls.length ? h("div.tbl-wrap", {}, h("table.cost-table", {}, h("thead", {}, h("tr", {}, ...["День", "Сервис", "Успешно", "Ошибки"].map(t => h("th", {}, t)))),
+        h("tbody", {}, ...r.calls.slice(0, 60).map(x => h("tr", {}, h("td", {}, x.day), h("td", {}, st.providers[x.provider]?.label || x.provider), h("td.num", {}, x.ok), h("td.num", {}, x.err)))))) : h("div.dim", {}, "Запросов пока не было.")));
 }

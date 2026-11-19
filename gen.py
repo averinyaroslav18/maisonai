@@ -1,5 +1,5 @@
 """Генерация медиа: картинки, озвучка, видео. Только реальные вызовы провайдеров — никаких имитаций."""
-import asyncio, base64, copy, json, random, shutil, time, urllib.parse, uuid
+import asyncio, base64, copy, json, os, random, re, shutil, time, urllib.parse, uuid
 from pathlib import Path
 import httpx
 import ai, media, providers as P
@@ -29,11 +29,37 @@ def _cf_image(r: httpx.Response) -> bytes:
     if not b64: raise UserError("Cloudflare не вернул картинку.")
     return base64.b64decode(b64)
 
-def image(prompt: str, ratio="1:1", seed=None, refs=None, job=None, strength=0.65, negative="") -> dict:
+def free_alt(cap: str) -> str:
+    """Запасной БЕСПЛАТНЫЙ вариант, если платный провайдер недоступен. На платный не переключаемся никогда."""
+    order = {"image": ["cloudflare", "comfyui", "pollinations_free"], "image_edit": ["cloudflare", "comfyui"], "video": ["hf_spaces", "comfyui", "slideshow"]}[cap]
+    c = P.load_cfg()
+    for pid in order:
+        if pid == "comfyui" and "comfyui" not in c["use"].values(): continue
+        if P.configured(pid): return pid
+    return ""
+
+def _fal_image(prompt, ratio, seed, refs, job, W, H) -> dict:
+    import fal, billing
+    ep = fal.model("image_edit" if refs else "image"); c = fal.cost(ep, width=W, height=H)
+    r = billing.paid_call(job, "fal.ai", ep, "правка картинки" if refs else "картинка", c["units"], c["unit"], c["usd"],
+                          lambda: fal.image(ep, prompt, W, H, seed, refs, ratio, job))
+    return {"path": r["path"], "provider": "fal.ai · " + c["label"], "seed": seed, "width": r["width"], "height": r["height"], "paid_usd": c["usd"]}
+
+def image(prompt: str, ratio="1:1", seed=None, refs=None, job=None, strength=0.65, negative="", _pid=None) -> dict:
     """Генерация или редактирование картинки. refs — список путей к исходным картинкам (для правки)."""
     refs = [Path(r) for r in (refs or [])]
     cap = "image_edit" if refs else "image"
-    pid = ai.need(cap)
+    pid = _pid or ai.need(cap)
+    if pid == "fal":
+        import fal
+        W, H = RATIOS.get(ratio, RATIOS["1:1"])
+        if job: job.provider("fal.ai")
+        try: return _fal_image(prompt, ratio, int(seed) if seed not in (None, "", -1) else random.randint(1, 2_000_000_000), refs, job, W, H)
+        except fal.FalDown as e:
+            alt = free_alt(cap)
+            if not alt: raise
+            if job: job.progress(getattr(job, "_p", 0.3), f"{e} Делаю бесплатно: {P.PROVIDERS[alt]['label']}.")
+            r = image(prompt, ratio, seed, refs, job, strength, negative, _pid=alt); r["note"] = str(e); return r
     seed = int(seed) if seed not in (None, "", -1) else random.randint(1, 2_000_000_000)
     W, H = RATIOS.get(ratio, RATIOS["1:1"])
     if job: job.provider(P.PROVIDERS[pid]["label"])
@@ -96,6 +122,10 @@ FALLBACK_VOICES = [  # используются, только если спис�
 _voices = {"t": 0, "v": None}
 
 def voices() -> list:
+    gem = [{"id": "gemini:" + n, "gender": "Female" if g == "F" else "Male", "locale": "multi", "name": f"Gemini · {n} ({d})", "provider": "gemini"} for n, g, d in GEMINI_VOICES] if P.configured("gemini") else []
+    return gem + _edge_voices()
+
+def _edge_voices() -> list:
     if _voices["v"] and time.time() - _voices["t"] < 86400: return _voices["v"]
     try:
         import edge_tts
@@ -105,12 +135,54 @@ def voices() -> list:
     except Exception:
         return [{"id": i, "gender": g, "locale": l, "name": i} for i, g, l in FALLBACK_VOICES]
 
-def tts(text: str, voice="uk-UA-PolinaNeural", rate=0, pitch=0, volume=0, job=None) -> dict:
+GEMINI_VOICES = [("Kore", "F", "твёрдый"), ("Puck", "M", "бодрый"), ("Charon", "M", "информативный"), ("Zephyr", "F", "яркий"),
+    ("Fenrir", "M", "возбуждённый"), ("Leda", "F", "молодой"), ("Orus", "M", "твёрдый"), ("Aoede", "F", "лёгкий"), ("Callirrhoe", "F", "непринуждённый"),
+    ("Autonoe", "F", "яркий"), ("Enceladus", "M", "с придыханием"), ("Iapetus", "M", "чёткий"), ("Umbriel", "M", "непринуждённый"), ("Algieba", "M", "мягкий"),
+    ("Despina", "F", "мягкий"), ("Erinome", "F", "чёткий"), ("Algenib", "M", "с хрипотцой"), ("Rasalgethi", "M", "информативный"), ("Laomedeia", "F", "бодрый"),
+    ("Achernar", "F", "мягкий"), ("Alnilam", "M", "твёрдый"), ("Schedar", "M", "ровный"), ("Gacrux", "F", "зрелый"), ("Pulcherrima", "F", "уверенный"),
+    ("Achird", "M", "дружелюбный"), ("Zubenelgenubi", "M", "разговорный"), ("Vindemiatrix", "F", "нежный"), ("Sadachbia", "M", "живой"),
+    ("Sadaltager", "M", "знающий"), ("Sulafat", "F", "тёплый")]
+EMOTIONS = {"": "", "calm": "Say calmly and warmly", "happy": "Say cheerfully and with energy", "excited": "Say with excitement, like a viral TikTok hook",
+            "serious": "Say seriously and confidently", "sad": "Say softly and sadly", "whisper": "Whisper", "ad": "Say like a premium advertisement voiceover"}
+
+def gemini_tts(text, voice="Kore", rate=0, emotion="", job=None) -> dict:
+    """Озвучка Gemini (бесплатный уровень Google AI Studio, в пределах дневного лимита ключа)."""
+    if not P.configured("gemini"): raise UserError("Голоса Gemini работают с бесплатным ключом Gemini: Настройки → Провайдеры → Google Gemini.")
+    name = voice.split(":", 1)[1] if voice.startswith("gemini:") else voice
+    if name not in [v[0] for v in GEMINI_VOICES]: name = "Kore"
+    prompt = (EMOTIONS.get(emotion) or emotion or "").strip()
+    body = {"contents": [{"parts": [{"text": (prompt + ": " if prompt else "") + text}]}],
+            "generationConfig": {"responseModalities": ["AUDIO"], "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": name}}}}}
+    models = [P.model_for("gemini", "tts", "gemini-2.5-flash-preview-tts")] + [m for m in ("gemini-2.5-flash-preview-tts", "gemini-3.1-flash-tts-preview") if m != P.model_for("gemini", "tts", "gemini-2.5-flash-preview-tts")]
+    last = None
+    with ai.make_client(httpx.Timeout(180, connect=15)) as c:
+        for m in models:
+            r = ai.post_retry(c, f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent", job=job, tries=2,
+                              params={"key": P.secret("gemini")}, json=body)
+            if r.status_code == 200:
+                try: b64 = r.json()["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
+                except Exception: raise UserError("Gemini не вернул звук. Попробуйте другой голос или сократите текст.")
+                pcm = tmp_path(".pcm"); pcm.write_bytes(base64.b64decode(b64)); out = tmp_path(".mp3")
+                tempo = max(0.5, min(2.0, 1 + int(rate) / 100))
+                media.run(["-f", "s16le", "-ar", "24000", "-ac", "1", "-i", pcm, "-af", f"atempo={tempo:.3f}", "-b:a", "160k", out])
+                dur = media.probe(out)["duration"]
+                return {"path": out, "segments": media.split_caption_segments(text, dur), "provider": f"Gemini TTS · {name}", "approx": True}
+            last = r
+            if r.status_code not in (404, 429): break
+    if last is not None and last.status_code == 429: raise UserError("Закончился бесплатный лимит голосов Gemini на сегодня. Выберите голос Microsoft — они без лимита.")
+    if last is not None and last.status_code in (401, 403): raise UserError("Gemini не принял ключ для озвучки.")
+    raise UserError(f"Голоса Gemini сейчас недоступны (ошибка {getattr(last, 'status_code', '?')}). Выберите голос Microsoft.")
+
+def tts(text: str, voice="uk-UA-PolinaNeural", rate=0, pitch=0, volume=0, job=None, emotion="") -> dict:
     """Возвращает {'path': mp3, 'segments': точные тайминги фраз (для субтитров), 'provider'}."""
     text = (text or "").strip()
     if not text: raise UserError("Введите текст для озвучки.")
     if len(text) > 8000: raise UserError("Текст слишком длинный (больше 8000 символов). Разбейте его на части.")
+    if (voice or "").startswith("gemini:"):
+        if job: job.provider("Gemini TTS")
+        return gemini_tts(text, voice, rate, emotion, job)
     pid = ai.need("tts")
+    if pid == "gemini": pid = "edge_tts" if P.configured("edge_tts") else pid   # голос Microsoft выбран явно
     if job: job.provider(P.PROVIDERS[pid]["label"])
     out = tmp_path(".mp3")
     if pid == "edge_tts":
@@ -167,17 +239,31 @@ VIDEO_CAPS = {   # честно: что умеет каждый способ
     "slideshow": {"t2v": True, "i2v": True, "v2v": False, "durations": list(range(2, 61)), "note": "Анимированный монтаж из ИИ-кадров: движение камеры, без движения персонажей."},
     "comfyui": {"t2v": True, "i2v": True, "v2v": False, "durations": [2, 3, 4, 5], "note": "Настоящее нейросетевое видео Wan 2.2 5B на вашей видеокарте (до 5 сек за проход)."},
     "pollinations": {"t2v": True, "i2v": False, "v2v": False, "durations": [4, 6, 8], "note": "Облачные видеомодели за Pollen (платные кредиты). Цена показывается до запуска."},
-    "hf_spaces": {"t2v": True, "i2v": True, "v2v": False, "durations": [2, 3, 4, 5], "note": "Настоящее нейросетевое видео Wan 2.2 через Hugging Face: фото оживает — двигаются люди, волосы, вода, свет. До 5 секунд за клип, лимит ~5–8 клипов в день бесплатно."},
+    "hf_spaces": {"t2v": True, "i2v": True, "v2v": False, "durations": [2, 3, 4, 5], "note": "Настоящее нейросетевое видео Wan 2.2 через Hugging Face: фото оживает — двигаются люди, волосы, вода, свет. До 5 секунд за клип. Бесплатно ≈10 клипов по 3 с (или ≈6 по 5 с) в день на аккаунт."},
 }
 
-def video(prompt: str, ratio="9:16", duration=5, image_path=None, seed=None, job=None, negative="", scenes=None, hd=False) -> dict:
-    pid = ai.need("video")
+def video(prompt: str, ratio="9:16", duration=5, image_path=None, seed=None, job=None, negative="", scenes=None, hd=False, _pid=None) -> dict:
+    pid = _pid or ai.need("video")
     if job: job.provider(P.PROVIDERS[pid]["label"])
     seed = int(seed) if seed not in (None, "", -1) else random.randint(1, 2_000_000_000)
     if pid == "slideshow":
         return slideshow(prompt, ratio, duration, image_path, seed, job, scenes, hd)
     if pid == "comfyui":
         return comfy_video(prompt, ratio, duration, image_path, seed, negative, job)
+    if pid == "fal":
+        import fal, billing
+        if not image_path:   # модели fal оживляют картинку: стартовый кадр (его цена уже в подтверждённой сумме, если картинки тоже платные)
+            if job: job.progress(0.06, "Рисую стартовый кадр…")
+            image_path = image(prompt, ratio, seed, job=job)["path"]
+        ep = fal.model("video"); c = fal.cost(ep, seconds=duration)
+        try:
+            r = billing.paid_call(job, "fal.ai", ep, f"видео {c['units']} с", c["units"], c["unit"], c["usd"],
+                                  lambda: fal.video(ep, prompt, Path(image_path), duration, negative, job))
+        except fal.FalDown as e:
+            alt = free_alt("video")
+            if job: job.progress(0.3, f"{e} Делаю бесплатно: {P.PROVIDERS[alt]['label']}.")
+            r = video(prompt, ratio, duration, image_path, seed, job, negative, scenes, hd, _pid=alt); r["note"] = str(e); return r
+        return {"path": r["path"], "provider": "fal.ai · " + c["label"], "seed": seed, "ai_video": True, "paid_usd": c["usd"], "seconds": r["seconds"]}
     if pid == "hf_spaces":
         if not image_path:   # Wan 2.2 оживляет картинку: сначала рисуем стартовый кадр
             if job: job.progress(0.08, "Рисую стартовый кадр…")
@@ -350,16 +436,19 @@ HF_SPACE = "zerogpu-aoti/wan2-2-fp8da-aoti-faster"
 HF_NEG = "static, frozen, still image, blurry, distorted face, extra fingers, deformed hands, watermark, text, subtitles, low quality, jpeg artifacts, flicker"
 make_hf_client = None   # для тестов
 
-def hf_video(prompt, duration, image_path, seed, negative, job) -> dict:
-    """Оживление фото моделью Wan 2.2 (14B) в публичном пространстве Hugging Face. Тратит вашу бесплатную дневную квоту."""
-    try: from gradio_client import Client, handle_file
-    except ImportError: raise UserError("Не установлен клиент Hugging Face. Запустите INSTALL.bat ещё раз.")
-    space = P.model_for("hf_spaces", "video", HF_SPACE)
+HF_EMPTY = {}   # токен → когда у него закончилась квота
+# Hugging Face списывает лимит не по факту, а по оценке пространства: 10 с + шаги × время шага.
+# 4 шага (так настроена ускоренная модель по умолчанию) — примерно в 1,5 раза больше клипов из того же лимита.
+HF_STEPS = 4
+class _HfQuota(Exception): pass
+
+def _hf_once(space, token, prompt, duration, image_path, seed, negative, job):
+    from gradio_client import Client, handle_file
     out_dir = tmp_path(""); out_dir.mkdir()
     if job: job.progress(getattr(job, "_p", 0.1), "Подключаюсь к Hugging Face…")
     try:
-        client = (make_hf_client or Client)(space, token=P.secret("hf_spaces"), verbose=False, download_files=str(out_dir))
-        jb = client.submit(handle_file(str(image_path)), prompt[:1200], 6, negative or HF_NEG, float(max(1, min(5, duration))), 1, 1, int(seed) % 2147483647, False, api_name="/generate_video")
+        client = (make_hf_client or Client)(space, token=token, verbose=False, download_files=str(out_dir))
+        jb = client.submit(handle_file(str(image_path)), prompt[:1200], HF_STEPS, negative or HF_NEG, float(max(1, min(5, duration))), 1, 1, int(seed) % 2147483647, False, api_name="/generate_video")
         t0 = time.time()
         while not jb.done():
             if job:
@@ -371,16 +460,36 @@ def hf_video(prompt, duration, image_path, seed, negative, job) -> dict:
                 el = time.time() - t0; job.progress(min(0.95, getattr(job, "_p", 0.1) + 0.5 * (1 - 1 / (1 + el / 60))), msg)
             if time.time() - t0 > 900: raise UserError("Hugging Face не ответил за 15 минут. Повторите позже.")
             time.sleep(1)
-        res = jb.result()
+        return jb.result()
     except UserError: raise
     except Exception as e:
         s = str(e)
-        if any(k in s.lower() for k in ("quota", "exceeded", "zerogpu")):
-            raise UserError("Закончилась бесплатная дневная квота Hugging Face (5 минут видеокарты в день). Она обновится через 24 часа — или ролик соберётся монтажом из фото.")
+        if any(k in s.lower() for k in ("quota", "exceeded", "zerogpu")): raise _HfQuota(s)
         if any(k in s for k in ("401", "403", "Invalid token", "Unauthorized")): raise UserError("Hugging Face не принял токен. Проверьте его в Настройках → Провайдеры.")
         if any(k in s.lower() for k in ("could not fetch", "not found", "paused", "sleeping", "runtime error", "build error")):
             raise UserError(f"Пространство Hugging Face «{space}» сейчас недоступно. Повторите позже.")
         raise UserError("Hugging Face вернул ошибку: " + s.splitlines()[-1][:250] if s else "Hugging Face вернул ошибку.")
+
+def hf_video(prompt, duration, image_path, seed, negative, job) -> dict:
+    """Оживление фото моделью Wan 2.2 (14B) в публичном пространстве Hugging Face. Тратит вашу бесплатную дневную квоту."""
+    try: from gradio_client import Client, handle_file
+    except ImportError: raise UserError("Не установлен клиент Hugging Face. Запустите INSTALL.bat ещё раз.")
+    space = P.model_for("hf_spaces", "video", HF_SPACE)
+    toks = re.findall(r"hf_\w+", P.secret("hf_spaces") or "") or [None]
+    if toks != [None] and not os.environ.get("MAISONAI_CLOUD"): toks.append(False)   # дома: потом гостевой лимит без аккаунта
+    now = time.time()
+    fresh = [t for t in toks if now - HF_EMPTY.get(t, 0) > 3600] or toks   # у кого лимит кончился — пробуем через час
+    last = None
+    for i, tok in enumerate(fresh):
+        try:
+            res = _hf_once(space, tok, prompt, duration, image_path, seed, negative, job)
+            break
+        except _HfQuota as e:
+            HF_EMPTY[tok] = time.time(); last = e
+            if job and i + 1 < len(fresh): job.progress(getattr(job, "_p", 0.1), "Лимит этого аккаунта кончился — пробую следующий…")
+    else:
+        raise UserError("Закончилась бесплатная дневная квота Hugging Face" + (" на всех подключённых аккаунтах" if len(fresh) > 1 else "")
+                        + ". Она постепенно восстанавливается в течение суток — или ролик соберётся монтажом из фото.")
     vid = res[0] if isinstance(res, (list, tuple)) else res
     if isinstance(vid, dict): vid = vid.get("video") or vid.get("path") or vid.get("value")
     if not vid or not Path(str(vid)).exists(): raise UserError("Hugging Face не вернул видео. Повторите.")

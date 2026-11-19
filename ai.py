@@ -272,5 +272,19 @@ def test_provider(pid: str) -> dict:
                 b = r.json(); return {"ok": True, "detail": f"Ключ работает. Баланс: {b.get('balance', b)} Pollen", "ms": int((time.time() - t0) * 1000)}
             r.raise_for_status()
         return {"ok": True, "detail": "Ключ принят", "ms": int((time.time() - t0) * 1000)}
+    if pid == "fal":
+        import fal
+        return {**fal.test(), "ms": int((time.time() - t0) * 1000)}
+    if pid == "hf_spaces":
+        toks = re.findall(r"hf_[A-Za-z0-9]{10,}", P.secret("hf_spaces"))
+        if not toks: return {"ok": False, "detail": "Вставьте токен Hugging Face (начинается с hf_)."}
+        names, bad = [], 0
+        with make_client(httpx.Timeout(20, connect=10)) as c:
+            for t in toks:
+                r = c.get("https://huggingface.co/api/whoami-v2", headers={"Authorization": f"Bearer {t}"})
+                if r.status_code == 200: names.append(r.json().get("name", "?"))
+                else: bad += 1
+        if not names: return {"ok": False, "detail": "Hugging Face не принял токен. Создайте новый на huggingface.co/settings/tokens."}
+        return {"ok": True, "detail": "Аккаунты: " + ", ".join(names) + (f". Не принято токенов: {bad}" if bad else "") + ". Видео делается по очереди с каждого, пока не кончится его дневной лимит.", "ms": int((time.time() - t0) * 1000)}
     ms = list_models(pid)
     return {"ok": True, "detail": f"Подключено. Доступно моделей: {len(ms)}", "models": ms[:300], "ms": int((time.time() - t0) * 1000)}

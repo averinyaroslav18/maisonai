@@ -11,7 +11,7 @@ TMP = DATA / "tmp"
 DB = DATA / "maisonai.db"
 for p in (DATA, FILES, TMP): p.mkdir(parents=True, exist_ok=True)
 ASSETS = HERE / "assets"
-VERSION = "3.1.0"
+VERSION = "4.0.0"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, pass TEXT NOT NULL,
@@ -111,7 +111,7 @@ class Job:
     """Передаётся в функцию задачи: прогресс, сообщения, отмена."""
     def __init__(self, jid, uid, project_id, params):
         self.id, self.uid, self.project_id, self.params = jid, uid, project_id, params
-        self._last = 0.0
+        self._last = 0.0; self.allow = None
     def progress(self, p: float, msg: str = None):
         if self.id in CANCEL: raise Cancelled()
         now = time.time()
@@ -132,12 +132,14 @@ class UserError(Exception):
     """Понятная пользователю ошибка (без технических подробностей)."""
 
 def submit(uid, tool, title, params, fn, project_id=None):
-    jid = uuid.uuid4().hex[:16]
+    jid = uuid.uuid4().hex[:16]; params_in = params
     with db() as c:
         c.execute("INSERT INTO jobs(id,user_id,project_id,tool,title,params,status,created) VALUES(?,?,?,?,?,?,?,?)",
                   (jid, uid, project_id, tool, (title or tool)[:200], json.dumps(params, ensure_ascii=False), "queued", time.time()))
     def run():
-        job = Job(jid, uid, project_id, params)
+        job = Job(jid, uid, project_id, params_in)
+        params = {k: v for k, v in params_in.items() if not k.startswith("_")}   # служебное (кошелёк, отпечаток) не передаём в функцию
+        job.allow = params_in.get("_allow")   # подтверждённая сумма для платных вызовов (billing)
         with db() as c: c.execute("UPDATE jobs SET status='running', started=?, message=? WHERE id=?", (time.time(), "Начинаю…", jid))
         try:
             res = fn(job, **params)

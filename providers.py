@@ -9,7 +9,7 @@ PROVIDERS = {
     "pollinations_free": {"label": "Pollinations без ключа", "caps": ["text", "image"], "needs": [],
         "cost": "free", "limits": "Бесплатно, без регистрации. Текст — не чаще 1 запроса в 30 сек, картинки — 1 в 45 сек, до 768×768. Работает «как получится», без гарантий.",
         "signup": "https://pollinations.ai"},
-    "gemini": {"label": "Google Gemini", "caps": ["text", "vision", "video_understanding", "stt"], "needs": ["key"],
+    "gemini": {"label": "Google Gemini", "caps": ["text", "vision", "video_understanding", "stt", "tts"], "needs": ["key"],
         "cost": "free_quota", "limits": "Бесплатный ключ в Google AI Studio. Лимиты запросов в минуту/день зависят от модели и аккаунта — точные цифры показаны в AI Studio. Понимает видео и картинки.",
         "signup": "https://aistudio.google.com/apikey", "base": "https://generativelanguage.googleapis.com/v1beta/openai"},
     "groq": {"label": "Groq", "caps": ["text", "stt"], "needs": ["key"],
@@ -30,12 +30,15 @@ PROVIDERS = {
     "edge_tts": {"label": "Microsoft Edge голоса", "caps": ["tts"], "needs": [],
         "cost": "free", "limits": "Бесплатно, без ключа, более 300 голосов (в т.ч. украинские и русские). Неофициальный способ доступа: Microsoft может изменить его в любой момент.",
         "signup": ""},
-    "pollinations": {"label": "Pollinations с ключом", "caps": ["text", "image", "video", "tts"], "needs": ["key"],
+    "pollinations": {"label": "Pollinations с ключом", "caps": ["text"], "needs": ["key"],
         "cost": "paid_credits", "limits": "Списывает «Pollen» (1 Pollen ≈ 1 $). Бесплатно дают только разовые Pollen за задания в кабинете. Цена каждой модели показывается перед запуском. Включайте, только если согласны тратить кредиты.",
         "signup": "https://enter.pollinations.ai"},
     "hf_spaces": {"label": "Hugging Face · Wan 2.2 (оживление фото)", "caps": ["video"], "needs": ["key"],
         "cost": "free_quota", "limits": "Настоящее нейросетевое видео: персонажи и предметы двигаются. Бесплатный аккаунт Hugging Face даёт 5 минут видеокарты в день — это примерно 5–8 клипов по 5 секунд. Лимит обновляется через 24 часа. Если очередь занята, придётся подождать.",
         "signup": "https://huggingface.co/settings/tokens"},
+    "fal": {"label": "fal.ai (платно, с подтверждением цены)", "caps": ["image", "image_edit", "video"], "needs": ["key"],
+        "cost": "paid", "limits": "Платный сервис с предоплатой. Видео Hailuo 02 Fast ≈ $0.017/сек (512p), Kling 2.5 Turbo Pro ≈ $0.07/сек (1080p); картинки FLUX schnell ≈ $0.003/Мпикс, правка Nano Banana ≈ $0.04. Перед каждым запуском MaisonAI показывает цену и ждёт подтверждения; действуют дневной и месячный бюджет (Настройки → Расходы).",
+        "signup": "https://fal.ai/dashboard/keys"},
     "comfyui": {"label": "ComfyUI (на этом компьютере)", "caps": ["image", "image_edit", "video"], "needs": [],
         "cost": "local", "limits": "Бесплатно и без лимитов, но нужна видеокарта NVIDIA. Видео Wan 2.2 5B: ~8 ГБ видеопамяти и более (с выгрузкой в ОЗУ), 5-секундный ролик — от нескольких минут.",
         "signup": "https://www.comfy.org/download", "base": "http://127.0.0.1:8188"},
@@ -70,7 +73,7 @@ def _keys_path(): return DATA / "keys.dat"
 
 ENV_KEYS = {"gemini": {"key": "GEMINI_API_KEY"}, "groq": {"key": "GROQ_API_KEY"}, "openrouter": {"key": "OPENROUTER_API_KEY"},
             "cloudflare": {"key": "CLOUDFLARE_API_TOKEN", "account": "CLOUDFLARE_ACCOUNT_ID"}, "pollinations": {"key": "POLLINATIONS_API_KEY"},
-            "hf_spaces": {"key": "HF_TOKEN"}}
+            "hf_spaces": {"key": "HF_TOKEN"}, "fal": {"key": "FAL_KEY"}}
 
 def _fernet():
     """На сервере (не Windows) ключи шифруются; ключ шифрования лежит отдельно от папки данных."""

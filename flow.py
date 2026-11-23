@@ -176,15 +176,15 @@ def make_clip(job, uid, project_id, sid, mode="auto"):
         job.progress(getattr(job, "_p", 0.1), "Сначала рисую кадр сцены…"); make_frame(job, uid, project_id, sid); f = load(uid, project_id); s = scene(f, sid)
     img = asset_file(get_asset(uid, s["frame"]))
     vp = P.chosen("video")
-    want_ai = mode == "ai" or (mode == "auto" and vp in ("fal", "hf_spaces", "comfyui"))
+    want_ai = mode == "ai" or (mode == "auto" and vp in gen.AI_VIDEO)
     W, H = media.FORMATS.get(st["ratio"], media.FORMATS["9:16"])
     note, kind = "", "motion"
     clip = None
-    if want_ai and vp in ("fal", "hf_spaces", "comfyui"):
+    if want_ai and vp in gen.AI_VIDEO:
         update_scene(uid, project_id, sid, status="clip")
         try:
             prompt = f"{s.get('action') or s.get('visual')}. Camera: {s.get('camera_move') or 'slow push in'}. {st.get('style', '')}"[:1500]
-            r = gen.video(prompt, st["ratio"], min(10, s["duration"]), image_path=str(img), job=job)
+            r = gen.video(prompt, st["ratio"], min(10, s["duration"]), image_path=str(img), job=job, ai_only=True)
             clip = media.video_clip(r["path"], 0, s["duration"], W, H, volume=0.0)
             kind = "ai"; prov = r["provider"]; note = r.get("note", "")
         except UserError as e:

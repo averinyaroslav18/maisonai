@@ -250,7 +250,7 @@ def keys_set(b: KeyIn, request: Request):
         sec[b.provider] = cur
     P.save_secrets(sec)
     c = P.load_cfg(); c["models"] = {k: v for k, v in c["models"].items() if not k.startswith(b.provider + ":")}; P.save_cfg(c)
-    P.auto_best()   # сразу подключаем лучшее из доступного
+    gen.COOL.pop(b.provider, None); P.auto_best()   # сразу подключаем лучшее из доступного
     return P.public_state()
 
 @app.post("/api/settings/test/{pid}")
@@ -658,7 +658,7 @@ def t_video(b: VideoIn, request: Request):
         if hd and r.get("ai_video"):   # нейросеть выдаёт ~720p: честно увеличиваем до 1080p (помечаем в описании)
             job.progress(0.97, "Увеличиваю до 1080p…"); path = media.upscale(path, ratio); r["provider"] += " (увеличено до 1080p)"
         a = job.asset(path, kind="video", name=prompt[:60] + ".mp4", meta={"prompt": prompt, "ratio": ratio, "duration": duration, "provider": r["provider"], "ai_video": r.get("ai_video"), "seed": r["seed"], **media.probe(path)})
-        return {"asset": a, "ai_video": r.get("ai_video"), "provider": r["provider"]}
+        return {"asset": a, "ai_video": r.get("ai_video"), "provider": r["provider"], **({"note": r["note"]} if r.get("note") else {})}
     return start(request, "video", "Видео: " + b.prompt[:80], {"prompt": prompt, "ratio": b.ratio, "duration": b.duration, "image": img, "seed": b.seed, "negative": b.negative, "hd": b.resolution == "1080p"}, run, b.project_id,
                  paid=("video", b.model_dump()))
 
@@ -756,6 +756,8 @@ def ask_clear(request: Request, project_id: int = 0):
 import sys as _sys, cloud
 cloud.install(app, _sys.modules[__name__])
 billing.install(app, _sys.modules[__name__])
+import vidcat; vidcat.install(app, _sys.modules[__name__])
+import agnes; agnes.install(app)
 flow.install(app, _sys.modules[__name__])
 studio.install(app, _sys.modules[__name__])
 remote.install(app, _sys.modules[__name__])

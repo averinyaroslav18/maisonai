@@ -378,6 +378,8 @@ async function costs(body) {
         meter("Сегодня", sp.day, b.daily), meter("Этот месяц", sp.month, b.monthly),
         h("div.grid3", {}, field("В день, $", daily), field("В месяц, $", monthly), field("На одну задачу, $", maxJob)),
         edit ? btn("Сохранить бюджет", async () => { try { await api("/api/costs/budget", { body: { daily: +daily.value, monthly: +monthly.value, max_job: +maxJob.value } }); toast("Бюджет сохранён"); costs(body); } catch (x) { fail(x); } }, "pri", "check") : h("div.dim", {}, "Бюджет меняет владелец.")),
+      h("div.panel.col", {}, h("h3", { style: { margin: 0 } }, "Генерация видео — все варианты"), h("p.dim", { style: { fontSize: "13px", margin: 0 } }, "Бесплатные (Hugging Face, свой компьютер, монтаж) и платные (fal.ai — сотни моделей, Google Veo, Runway) в одном списке с ценами."),
+        btn("Все модели видео", () => import("./videomodels.js").then(m => m.openVideoModels()), "pri", "sparkles")),
       h("div.panel.col", {}, h("h3", { style: { margin: 0 } }, "fal.ai — платные модели"),
         falOn ? h("div.note", {}, "Ключ fal.ai подключён.") : h("div.note.warn", {}, "Ключ fal.ai не подключён: Провайдеры ИИ → fal.ai → вставьте ключ с fal.ai/dashboard/keys. Без ключа платные модели не используются."),
         ...kinds.map(([k]) => modelSel(k)),

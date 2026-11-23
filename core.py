@@ -11,7 +11,7 @@ TMP = DATA / "tmp"
 DB = DATA / "maisonai.db"
 for p in (DATA, FILES, TMP): p.mkdir(parents=True, exist_ok=True)
 ASSETS = HERE / "assets"
-VERSION = "4.0.0"
+VERSION = "4.2.1"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, pass TEXT NOT NULL,

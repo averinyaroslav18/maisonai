@@ -1,3 +1,4 @@
+import { openVideoModels } from "./videomodels.js";
 import { api, h, icon, btn, fail, toast, runTool, handoff, go, field, select, segmented, RATIOS, pickAsset, assetCard, previewModal, toggleFav, deleteAsset, download, providerBadge, loadProviders, styleSelect, uploadFiles, dropZone, state } from "./lib.js";
 
 const CAMERA = [["", "На выбор ИИ"], ["static locked-off shot", "Статичная камера"], ["slow dolly in", "Плавный наезд"], ["slow dolly out", "Плавный отъезд"], ["smooth tracking shot following the subject", "Сопровождение"],
@@ -14,7 +15,7 @@ export async function render(page) {
   if (!caps.i2v) disabled.i2v = "Выбранный генератор не поддерживает стартовую картинку";
   disabled.v2v = "Ни один из бесплатных генераторов пока не умеет «видео → видео». Используйте «Воссоздание стиля».";
   const mode = segmented([["photos", "Много фото → видео"], ["t2v", "Текст → видео"], ["i2v", "Картинка → видео"], ["v2v", "Видео → видео"]], pre.mode && !disabled[pre.mode] ? pre.mode : "photos", v => drawMode(v), disabled);
-  const realAI = ["hf_spaces", "comfyui"].includes(pid);
+  const realAI = ["agnes", "hf_spaces", "comfyui", "fal", "veo", "runway"].includes(pid);
   // ---------- режим «Много фото → видео» ----------
   let photos = [];
   const pgrid = h("div.pgrid");
@@ -79,7 +80,8 @@ export async function render(page) {
     try {
       const r = await runTool("/api/tools/video", { prompt: prompt.value.trim(), mode: mode.value, ratio: ratio.value, duration: +duration.value, source: source?.id || null, style: style.value, camera: camera.value, characters: chars.value, resolution: res.value, style_id: styleSel.value || null }, out, "Видео");
       out.replaceChildren(h("div.col", {}, h("div.viewer", {}, h("video", { src: r.asset.url, controls: true, playsInline: true, autoplay: true, loop: true })),
-        r.ai_video === false ? h("div.note", {}, "Это монтаж из ИИ-кадров с движением камеры. Для настоящего нейросетевого видео подключите бесплатный Hugging Face (Настройки → Провайдеры).") : h("div.note", {}, "Сделано: " + r.provider),
+        r.note ? h("div.note.warn", {}, r.note) : null,
+        r.ai_video === false ? h("div.note", {}, "Это монтаж из ИИ-кадров с движением камеры. Для настоящего ИИ-видео, где персонажи двигаются, подключите бесплатный Agnes AI (Видео → Все модели видео → Бесплатно).") : h("div.note", {}, "Сделано: " + r.provider),
         h("div.row", {}, btn("Скачать", () => download(r.asset.url, r.asset.name), "", "download"), btn("Добавить озвучку", () => { handoff.set("editor_add", { video: r.asset.id }); go("#/editor"); }, "", "mic"),
           btn("В редактор", () => { handoff.set("editor_add", { video: r.asset.id }); go("#/editor"); }, "", "cut"))));
       load();
@@ -109,8 +111,8 @@ export async function render(page) {
     } catch (e) { gal.replaceChildren(h("div.err", {}, e.message)); }
   }
   page.append(
-    h("div.ph", {}, h("div", {}, h("h1", {}, "Видео"), h("p", {}, "Опишите ролик обычным текстом — ИИ превратит его в задание для видеомодели. Вертикальный формат 9:16 по умолчанию.")), h("div.sp"), providerBadge("video")),
-    caps.note ? h("div.note", { style: { marginBottom: "16px" } }, caps.note, pid === "slideshow" ? " Настоящее нейросетевое видео бесплатно — подключите Hugging Face в Настройках → Провайдеры (5 минут видеокарты в день)." : "") : null,
+    h("div.ph", {}, h("div", {}, h("h1", {}, "Видео"), h("p", {}, "Опишите ролик обычным текстом — ИИ превратит его в задание для видеомодели. Вертикальный формат 9:16 по умолчанию.")), h("div.sp"), providerBadge("video"), btn("Все модели видео", () => openVideoModels(() => { page.replaceChildren(); render(page); }), "sm pri", "sparkles")),
+    caps.note ? h("div.note", { style: { marginBottom: "16px" } }, caps.note, pid === "slideshow" ? " Настоящее ИИ-видео, где персонажи двигаются, бесплатно — подключите Agnes AI (ключ бесплатный: platform.agnes-ai.com) в Настройках → Провайдеры." : "") : null,
     h("div.split", {},
       h("div.panel.col.sticky", {}, field("Режим", mode), photosPanel, srcBox, ...(textOnly.push(field("Описание видео", prompt), h("div.row", {}, improve),
         field("Соотношение сторон", ratio), h("div.grid2", {}, field("Длительность", duration), field("Качество", res)),

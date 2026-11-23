@@ -90,7 +90,7 @@ async function editor(page, pid) {
     const total = f.scenes.reduce((a, s) => a + s.duration, 0);
     const steps = [["Сценарий", true], ["Раскадровка", true], ["Кадры", frames === f.scenes.length], ["Клипы", ready === f.scenes.length], ["Озвучка", !!f.voice_a], ["Предпросмотр", !!f.preview_a], ["MP4", !!f.final_a]];
     const provNote = f.video_paid ? h("div.note", {}, "Видео делает fal.ai — перед запуском покажу цену, без подтверждения ничего не списывается.")
-      : ["hf_spaces", "comfyui"].includes(f.video_provider) ? h("div.note", {}, "Клипы оживляет нейросеть (бесплатный лимит). Когда лимит кончится, сцена соберётся движением камеры — бесплатно.")
+      : ["agnes", "hf_spaces", "comfyui"].includes(f.video_provider) ? h("div.note", {}, "Клипы оживляет нейросеть (бесплатный лимит). Когда лимит кончится, сцена соберётся движением камеры — бесплатно.")
       : h("div.note.warn", {}, "Нейросетевое видео не подключено — сцены соберутся из кадров с движением камеры (бесплатно). Подключить: Настройки → Провайдеры (Hugging Face — бесплатно, fal.ai — платно).");
 
     // --- концепция ---

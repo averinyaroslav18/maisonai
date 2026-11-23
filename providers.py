@@ -36,9 +36,18 @@ PROVIDERS = {
     "hf_spaces": {"label": "Hugging Face · Wan 2.2 (оживление фото)", "caps": ["video"], "needs": ["key"],
         "cost": "free_quota", "limits": "Настоящее нейросетевое видео: персонажи и предметы двигаются. Бесплатный аккаунт Hugging Face даёт 5 минут видеокарты в день — это примерно 5–8 клипов по 5 секунд. Лимит обновляется через 24 часа. Если очередь занята, придётся подождать.",
         "signup": "https://huggingface.co/settings/tokens"},
+    "agnes": {"label": "Agnes AI · видео (сейчас бесплатно)", "caps": ["video"], "needs": ["key"],
+        "cost": "free_quota", "limits": "Настоящее ИИ-видео: персонажи и предметы двигаются. Agnes Video 2.5 Flash — 720P, 4–12 секунд, вертикальное 9:16. По официальной странице Agnes модель сейчас бесплатна по акции (обычная цена $0.025/сек — акция может закончиться, тогда программа скажет об этом и ничего не спишет). Лимит бесплатного плана ≈ 1–2 ролика в минуту. Ключ бесплатно: platform.agnes-ai.com.",
+        "signup": "https://platform.agnes-ai.com/"},
     "fal": {"label": "fal.ai (платно, с подтверждением цены)", "caps": ["image", "image_edit", "video"], "needs": ["key"],
-        "cost": "paid", "limits": "Платный сервис с предоплатой. Видео Hailuo 02 Fast ≈ $0.017/сек (512p), Kling 2.5 Turbo Pro ≈ $0.07/сек (1080p); картинки FLUX schnell ≈ $0.003/Мпикс, правка Nano Banana ≈ $0.04. Перед каждым запуском MaisonAI показывает цену и ждёт подтверждения; действуют дневной и месячный бюджет (Настройки → Расходы).",
+        "cost": "paid", "limits": "Платный сервис с предоплатой: одна учётная запись — сотни видеомоделей (Kling, Veo, Seedance, MiniMax/Hailuo, Wan, LTX, Luma, Pika и др.) с живыми ценами, от ≈ $0.015/сек. Выбор модели: Видео → «Все модели видео»; картинки FLUX schnell ≈ $0.003/Мпикс, правка Nano Banana ≈ $0.04. Перед каждым запуском MaisonAI показывает цену и ждёт подтверждения; действуют дневной и месячный бюджет (Настройки → Расходы).",
         "signup": "https://fal.ai/dashboard/keys"},
+    "veo": {"label": "Google Veo 3.1 (платно, с подтверждением цены)", "caps": ["video"], "needs": ["key"],
+        "cost": "paid", "limits": "Видео от Google со звуком: Veo 3.1 Lite ≈ $0.05/сек (720p), Fast ≈ $0.10/сек, Standard ≈ $0.40/сек; ролик 4, 6 или 8 секунд. Нужен ключ Google AI Studio с включённой оплатой (подойдёт и ключ Gemini). Перед каждым запуском — цена и подтверждение.",
+        "signup": "https://aistudio.google.com/apikey"},
+    "runway": {"label": "Runway (платно, с подтверждением цены)", "caps": ["video"], "needs": ["key"],
+        "cost": "paid", "limits": "Runway API, оплата кредитами ($0.01 за кредит, минимум $10): Gen-4 Turbo ≈ $0.05/сек, Kling 3.0 Standard ≈ $0.09/сек, Gen-4.5 ≈ $0.12/сек; ролик 5 или 10 секунд. Перед каждым запуском — цена и подтверждение.",
+        "signup": "https://dev.runwayml.com/"},
     "comfyui": {"label": "ComfyUI (на этом компьютере)", "caps": ["image", "image_edit", "video"], "needs": [],
         "cost": "local", "limits": "Бесплатно и без лимитов, но нужна видеокарта NVIDIA. Видео Wan 2.2 5B: ~8 ГБ видеопамяти и более (с выгрузкой в ОЗУ), 5-секундный ролик — от нескольких минут.",
         "signup": "https://www.comfy.org/download", "base": "http://127.0.0.1:8188"},
@@ -73,7 +82,7 @@ def _keys_path(): return DATA / "keys.dat"
 
 ENV_KEYS = {"gemini": {"key": "GEMINI_API_KEY"}, "groq": {"key": "GROQ_API_KEY"}, "openrouter": {"key": "OPENROUTER_API_KEY"},
             "cloudflare": {"key": "CLOUDFLARE_API_TOKEN", "account": "CLOUDFLARE_ACCOUNT_ID"}, "pollinations": {"key": "POLLINATIONS_API_KEY"},
-            "hf_spaces": {"key": "HF_TOKEN"}, "fal": {"key": "FAL_KEY"}}
+            "hf_spaces": {"key": "HF_TOKEN"}, "fal": {"key": "FAL_KEY"}, "veo": {"key": "VEO_API_KEY"}, "runway": {"key": "RUNWAYML_API_SECRET"}, "agnes": {"key": "AGNES_API_KEY"}}
 
 def _fernet():
     """На сервере (не Windows) ключи шифруются; ключ шифрования лежит отдельно от папки данных."""
@@ -129,6 +138,7 @@ def secret(pid: str, field: str = "key") -> str:
 
 def configured(pid: str) -> bool:
     p = PROVIDERS[pid]; s = load_secrets().get(pid) or {}; c = load_cfg()
+    if pid == "veo" and not s.get("key") and (load_secrets().get("gemini") or {}).get("key"): return True   # подходит ключ Gemini
     for need in p["needs"]:
         if need == "base":
             if not (c["base"].get(pid) or "").strip(): return False
@@ -186,14 +196,14 @@ BEST = {"text": ["gemini", "groq", "openrouter", "cloudflare", "pollinations_fre
         "image_edit": ["cloudflare"],
         "tts": ["edge_tts"],
         "stt": ["groq", "gemini", "cloudflare"],
-        "video": ["hf_spaces", "slideshow"]}
+        "video": ["agnes", "hf_spaces", "slideshow"]}
 
 def auto_best(force=False) -> dict:
     """Выбирает лучший бесплатный подключённый вариант. Платные (Pollinations с ключом) сам не включает."""
     c = load_cfg()
     if not force and (c.get("auto_best") is False or os.environ.get("MAISONAI_NO_AUTO")): return c["use"]
     for cap, order in BEST.items():
-        if cap == "video" and c["use"].get("video") == "comfyui": continue   # локальное видео, выбранное вручную, не трогаем
+        if c["use"].get(cap) in ("comfyui", "fal", "veo", "runway") and configured(c["use"][cap]): continue   # выбранное вручную (локальное или платное) не трогаем
         for pid in order:
             if configured(pid): c["use"][cap] = pid; break
     c["auto_best"] = True

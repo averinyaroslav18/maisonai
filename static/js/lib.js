@@ -290,8 +290,10 @@ export function providerBadge(cap) {
   const pid = s.active[cap];
   if (!pid) return h("span.tag.paid", {}, "не настроено");
   const p = s.providers[pid];
-  const lbl = { free: "бесплатно", free_quota: "бесплатный лимит", local: "локально", paid_credits: "платные кредиты", unknown: "" }[p.cost];
-  return h("span.tag" + (p.cost === "paid_credits" ? ".paid" : ".free"), { title: p.limits }, p.label + (lbl ? " · " + lbl : ""));
+  const lbl = { free: "бесплатно", free_quota: "бесплатный лимит", local: "локально", paid_credits: "платные кредиты", paid: "платно", unknown: "" }[p.cost];
+  let name = p.label.replace(/ \(платно[^)]*\)/, "");
+  const m = cap === "video" && s.models ? s.models[pid + ":video"] : ""; if (m && ["fal", "veo", "runway"].includes(pid)) name += " · " + m.split("/").slice(-2).join("/");
+  return h("span.tag" + (p.cost === "paid_credits" || p.cost === "paid" ? ".paid" : ".free"), { title: p.limits }, name + (lbl ? " · " + lbl : ""));
 }
 
 // Выбор сохранённого стиля Visual DNA (TikTok Intelligence) для генераторов

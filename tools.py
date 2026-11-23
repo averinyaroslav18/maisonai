@@ -299,7 +299,7 @@ def recreate_produce(job, plan, ratio="9:16", voice="ru-RU-SvetlanaNeural", with
         else:
             job.progress(job._p + 0.3 / n, f"Сцена {i + 1} из {n}: оживляю кадр…")
             v = gen.video(s.get("image_prompt", "") + ". " + s.get("motion_prompt", ""), ratio, min(5, dur) if vp == "comfyui" else dur,
-                          image_path=img["path"] if vp in ("comfyui", "fal", "hf_spaces") else None, seed=seed + i, job=job)
+                          image_path=img["path"] if vp in gen.AI_VIDEO else None, seed=seed + i, job=job)
             va = job.asset(v["path"], kind="video", name=f"Сцена {i + 1}.mp4", meta={"provider": v["provider"], "ai_video": v.get("ai_video")})
             clips.append({"asset": va["id"], "start": 0, "end": dur})
     spec = {"format": ratio, "clips": clips, "audio": [], "subtitles": [], "texts": [], "clip_volume": 0.4 if vp != "slideshow" else 1.0}
@@ -442,7 +442,7 @@ def photos_video(job, asset_ids, idea="", ratio="9:16", per_clip=4.0, ai_motion=
     if not photos: raise UserError("Добавьте хотя бы одно фото.")
     per_clip = max(2.0, min(8.0, float(per_clip)))
     vp = P.chosen("video") or "slideshow"
-    use_ai = ai_motion and vp in ("hf_spaces", "comfyui", "fal")
+    use_ai = ai_motion and vp in gen.AI_VIDEO
     plan = {"clips": [], "voiceover": "", "title": ""}
     want_voice = auto_voice and not voiceover.strip()
     if (use_ai or want_voice or captions) and P.chosen("vision"):
@@ -470,13 +470,13 @@ def photos_video(job, asset_ids, idea="", ratio="9:16", per_clip=4.0, ai_motion=
         if use_ai:
             job.progress(job._p, f"Фото {i + 1} из {len(photos)}: нейросеть оживляет кадр…")
             try:
-                r = gen.video(motion, ratio, min(5, per_clip), image_path=p, job=job)
+                r = gen.video(motion, ratio, min(5, per_clip), image_path=p, job=job, ai_only=True)
                 clip = media.video_clip(r["path"], 0, min(per_clip, float(r.get("seconds") or per_clip)), W, H, volume=0.0)
                 n_ai += 1
-            except UserError as e:
-                notes.append(f"Фото {i + 1}: {e}")
-                if "квота" in str(e).lower() or "квоту" in str(e).lower():
-                    use_ai = False   # лимит кончился — остальные фото собираем монтажом
+                if r.get("note"): notes.append(f"Фото {i + 1}: {r['note']}")
+            except UserError as e:   # все бесплатные ИИ-способы на отдыхе — это фото монтажом, следующее снова попробует ИИ
+                msg = f"Фото {i + 1}: {e}"
+                if not notes or notes[-1].split(": ", 1)[-1] != str(e): notes.append(msg)
         if clip is None:
             job.progress(job._p, f"Фото {i + 1} из {len(photos)}: динамичный монтаж…")
             clip = media.image_clip(p, per_clip, W, H, media.MOTIONS[i % len(media.MOTIONS)])

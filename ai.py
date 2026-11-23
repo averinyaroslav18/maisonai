@@ -275,6 +275,12 @@ def test_provider(pid: str) -> dict:
     if pid == "fal":
         import fal
         return {**fal.test(), "ms": int((time.time() - t0) * 1000)}
+    if pid == "agnes":
+        import agnes
+        return {**agnes.test(), "ms": int((time.time() - t0) * 1000)}
+    if pid in ("veo", "runway"):
+        import paidvideo
+        return {**(paidvideo.veo_test() if pid == "veo" else paidvideo.rw_test()), "ms": int((time.time() - t0) * 1000)}
     if pid == "hf_spaces":
         toks = re.findall(r"hf_[A-Za-z0-9]{10,}", P.secret("hf_spaces"))
         if not toks: return {"ok": False, "detail": "Вставьте токен Hugging Face (начинается с hf_)."}

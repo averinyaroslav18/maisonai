@@ -62,10 +62,19 @@ def paid(cap: str) -> bool:
     pid = P.chosen(cap)
     return bool(pid) and P.PROVIDERS.get(pid, {}).get("cost") == "paid"
 
-def item_video(seconds, what="видео") -> dict:
+def video_cost(seconds) -> tuple:
+    """(провайдер, модель, цена) для выбранного платного видео."""
+    pid = P.chosen("video")
+    if pid in ("veo", "runway"):
+        import paidvideo as PV
+        if pid == "veo": m = P.model_for("veo", "video", "veo-3.1-lite-generate-preview"); return "Google Veo", m, PV.veo_cost(m, seconds)
+        m = P.model_for("runway", "video", "gen4_turbo"); return "Runway", m, PV.rw_cost(m, seconds)
     import fal
-    ep = fal.model("video"); c = fal.cost(ep, seconds=seconds)
-    return {"provider": "fal.ai", "model": ep, "label": c["label"], "what": what, "units": c["units"], "unit": c["unit"], "usd": c["usd"], "source": c["source"]}
+    ep = fal.model("video"); return "fal.ai", ep, fal.cost(ep, seconds=seconds)
+
+def item_video(seconds, what="видео") -> dict:
+    prov, ep, c = video_cost(seconds)
+    return {"provider": prov, "model": ep, "label": c["label"], "what": what, "units": c["units"], "unit": c["unit"], "usd": c["usd"], "source": c["source"]}
 
 def item_image(width=1024, height=1024, edit=False, what="картинка") -> dict:
     import fal
@@ -96,7 +105,7 @@ def make_quote(uid, tool, body, items) -> dict:
             QUOTES[qid] = {"uid": uid, "tool": tool, "fp": fingerprint(uid, tool, body), "usd": total, "exp": time.time() + 900}
     return {"need_confirm": True, "quote": qid, "items": items, "total": total, "currency": "USD", "blocked": blocked,
             "budget": {"daily": b["daily"], "monthly": b["monthly"], "spent_day": s["day"], "spent_month": s["month"]},
-            "note": "Это примерная цена по тарифу провайдера. Сумма будет списана с вашего баланса fal.ai только за успешно созданные файлы."}
+            "note": "Это примерная цена по тарифу провайдера. Деньги списывает сам сервис (fal.ai, Google или Runway) с вашего баланса там; MaisonAI ничего не берёт."}
 
 class NeedConfirm(Exception):
     def __init__(self, detail): self.detail = detail

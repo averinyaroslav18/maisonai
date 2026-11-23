@@ -3,7 +3,7 @@ import asyncio, base64, copy, json, os, random, re, shutil, time, urllib.parse, 
 from pathlib import Path
 import httpx
 import ai, media, providers as P
-from core import UserError, tmp_path
+from core import UserError, tmp_path, Cancelled
 
 RATIOS = {"1:1": (1024, 1024), "9:16": (768, 1344), "16:9": (1344, 768), "4:5": (896, 1120)}
 
@@ -31,7 +31,7 @@ def _cf_image(r: httpx.Response) -> bytes:
 
 def free_alt(cap: str) -> str:
     """Запасной БЕСПЛАТНЫЙ вариант, если платный провайдер недоступен. На платный не переключаемся никогда."""
-    order = {"image": ["cloudflare", "comfyui", "pollinations_free"], "image_edit": ["cloudflare", "comfyui"], "video": ["hf_spaces", "comfyui", "slideshow"]}[cap]
+    order = {"image": ["cloudflare", "comfyui", "pollinations_free"], "image_edit": ["cloudflare", "comfyui"], "video": ["agnes", "hf_spaces", "comfyui", "slideshow"]}[cap]
     c = P.load_cfg()
     for pid in order:
         if pid == "comfyui" and "comfyui" not in c["use"].values(): continue
@@ -235,14 +235,65 @@ def group_words(words, max_words=4, max_gap=0.45) -> list:
     return out
 
 # ---------------- видео ----------------
+AI_VIDEO = ("agnes", "hf_spaces", "comfyui", "fal", "veo", "runway")   # способы, которые по-настоящему оживляют кадр
 VIDEO_CAPS = {   # честно: что умеет каждый способ
+    "agnes": {"t2v": True, "i2v": True, "v2v": False, "durations": list(range(4, 13)), "note": "Настоящее ИИ-видео Agnes Video 2.5 Flash (720P, 4–12 с): персонажи двигаются. Сейчас бесплатно по акции, лимит ≈ 1–2 ролика в минуту."},
     "slideshow": {"t2v": True, "i2v": True, "v2v": False, "durations": list(range(2, 61)), "note": "Анимированный монтаж из ИИ-кадров: движение камеры, без движения персонажей."},
     "comfyui": {"t2v": True, "i2v": True, "v2v": False, "durations": [2, 3, 4, 5], "note": "Настоящее нейросетевое видео Wan 2.2 5B на вашей видеокарте (до 5 сек за проход)."},
     "pollinations": {"t2v": True, "i2v": False, "v2v": False, "durations": [4, 6, 8], "note": "Облачные видеомодели за Pollen (платные кредиты). Цена показывается до запуска."},
+    "fal": {"t2v": True, "i2v": True, "v2v": False, "durations": [5, 6, 8, 10], "note": "Платные модели fal.ai: Kling, Veo, Seedance, MiniMax и сотни других. Перед запуском — цена и подтверждение."},
+    "veo": {"t2v": True, "i2v": True, "v2v": False, "durations": [4, 6, 8], "note": "Google Veo 3.1 со звуком. Платно, перед запуском — цена и подтверждение."},
+    "runway": {"t2v": True, "i2v": True, "v2v": False, "durations": [5, 10], "note": "Runway Gen-4 / Gen-4.5. Платно, перед запуском — цена и подтверждение."},
     "hf_spaces": {"t2v": True, "i2v": True, "v2v": False, "durations": [2, 3, 4, 5], "note": "Настоящее нейросетевое видео Wan 2.2 через Hugging Face: фото оживает — двигаются люди, волосы, вода, свет. До 5 секунд за клип. Бесплатно ≈10 клипов по 3 с (или ≈6 по 5 с) в день на аккаунт."},
 }
 
-def video(prompt: str, ratio="9:16", duration=5, image_path=None, seed=None, job=None, negative="", scenes=None, hd=False, _pid=None) -> dict:
+FREE_CHAIN = ("agnes", "hf_spaces", "comfyui", "slideshow")   # от лучшего бесплатного к запасному
+COOL = {}   # способ → (до какого времени не пробовать, почему)
+
+def cool(pid: str, seconds: float, why: str):
+    COOL[pid] = (time.time() + seconds, why)
+
+def free_chain(start: str, ai_only: bool = False) -> list:
+    """Порядок бесплатных способов для этого клипа: лучшее доступное → следующее… → монтаж (работает всегда)."""
+    c = P.load_cfg(); now = time.time()
+    if start == "slideshow": return ["slideshow"]
+    order = (["comfyui"] if start == "comfyui" else []) + [p for p in FREE_CHAIN if p != "comfyui"]
+    out = []
+    for p in order:
+        if p == "slideshow" and ai_only: continue
+        if p != "slideshow" and not P.configured(p): continue
+        if p != "slideshow" and COOL.get(p, (0,))[0] > now: continue
+        if p not in out: out.append(p)
+    return out if (out or ai_only) else ["slideshow"]
+
+def video(prompt: str, ratio="9:16", duration=5, image_path=None, seed=None, job=None, negative="", scenes=None, hd=False, _pid=None, ai_only=False) -> dict:
+    """Видео. Бесплатные способы идут цепочкой: кончился лимит у одного — клип делает следующий, а когда лимит
+    восстановится, программа сама вернётся к лучшему. Платные (fal, Veo, Runway) — только если выбраны вручную."""
+    if _pid == "free": pid, _pid = "agnes", None   # платный сервис недоступен → бесплатная цепочка
+    else: pid = _pid or ai.need("video")
+    if _pid or pid not in FREE_CHAIN: return _video_one(prompt, ratio, duration, image_path, seed, job, negative, scenes, hd, pid)
+    notes, last = [], None
+    chain = free_chain(pid, ai_only)
+    if not chain:
+        why = "; ".join(f"{P.PROVIDERS[k]['label'].split(' (')[0]} — {v[1].rstrip('.')}" for k, v in COOL.items() if v[0] > time.time() and P.configured(k))
+        raise UserError("Бесплатные лимиты (квота) ИИ-видео сейчас исчерпаны" + (f": {why}" if why else "") + ". Скоро восстановятся — программа сама вернётся к ним.")
+    for p in chain:
+        try:
+            r = _video_one(prompt, ratio, duration, image_path, seed, job, negative, scenes, hd, p)
+            if notes: r["note"] = " ".join(notes) + f" Этот клип сделан: {P.PROVIDERS[p]['label']}."
+            return r
+        except Cancelled: raise
+        except Exception as e:
+            last = e; msg = str(e) or type(e).__name__
+            if p == "slideshow": raise
+            secs = {"agnes": 1800 if "оплат" in msg or "акция" in msg else 90, "hf_spaces": 3600, "comfyui": 600}.get(p, 300)
+            cool(p, secs, msg)
+            notes.append(f"{P.PROVIDERS[p]['label']}: {msg.rstrip('.')}.")
+            if job: job.progress(getattr(job, "_p", 0.2), f"{P.PROVIDERS[p]['label'].split(' (')[0]} сейчас не может ({msg[:120]}). Пробую следующий бесплатный способ…")
+    if ai_only: raise UserError(" ".join(notes) + " Бесплатные ИИ-способы сейчас недоступны (квота/лимит).")
+    raise last or UserError("Не получилось сделать видео.")
+
+def _video_one(prompt: str, ratio="9:16", duration=5, image_path=None, seed=None, job=None, negative="", scenes=None, hd=False, _pid=None) -> dict:
     pid = _pid or ai.need("video")
     if job: job.provider(P.PROVIDERS[pid]["label"])
     seed = int(seed) if seed not in (None, "", -1) else random.randint(1, 2_000_000_000)
@@ -250,20 +301,41 @@ def video(prompt: str, ratio="9:16", duration=5, image_path=None, seed=None, job
         return slideshow(prompt, ratio, duration, image_path, seed, job, scenes, hd)
     if pid == "comfyui":
         return comfy_video(prompt, ratio, duration, image_path, seed, negative, job)
-    if pid == "fal":
-        import fal, billing
-        if not image_path:   # модели fal оживляют картинку: стартовый кадр (его цена уже в подтверждённой сумме, если картинки тоже платные)
+    if pid in ("veo", "runway"):
+        import paidvideo as PV, billing
+        prov, m, c = billing.video_cost(duration)
+        if pid == "runway" and not image_path and not PV.RUNWAY.get(m, {}).get("t2v"):
             if job: job.progress(0.06, "Рисую стартовый кадр…")
             image_path = image(prompt, ratio, seed, job=job)["path"]
-        ep = fal.model("video"); c = fal.cost(ep, seconds=duration)
+        fn = (lambda: PV.veo_video(m, prompt, image_path, duration, ratio, negative, job)) if pid == "veo" else (lambda: PV.rw_video(m, prompt, image_path, duration, ratio, job))
+        try: r = billing.paid_call(job, prov, m, f"видео {c['units']} с", c["units"], c["unit"], c["usd"], fn)
+        except PV.PaidDown as e:
+            alt = free_alt("video")
+            if not alt: raise
+            if job: job.progress(0.3, f"{e} Делаю бесплатно: {P.PROVIDERS[alt]['label']}.")
+            r = video(prompt, ratio, duration, image_path, seed, job, negative, scenes, hd, _pid="free"); r["note"] = str(e); return r
+        return {"path": r["path"], "provider": prov + " · " + c["label"], "seed": seed, "ai_video": True, "paid_usd": c["usd"], "seconds": r["seconds"]}
+    if pid == "fal":
+        import fal, billing
+        ep = fal.model("video")
+        if image_path and fal.is_t2v(ep):
+            raise UserError("Выбранная модель fal.ai делает видео только из текста и не умеет оживлять фото. Выберите модель с пометкой «картинка → видео» (Видео → Все модели видео).")
+        if not image_path and not fal.is_t2v(ep):   # модель оживляет картинку: стартовый кадр (его цена уже в подтверждённой сумме, если картинки тоже платные)
+            if job: job.progress(0.06, "Рисую стартовый кадр…")
+            image_path = image(prompt, ratio, seed, job=job)["path"]
+        c = fal.cost(ep, seconds=duration)
         try:
             r = billing.paid_call(job, "fal.ai", ep, f"видео {c['units']} с", c["units"], c["unit"], c["usd"],
-                                  lambda: fal.video(ep, prompt, Path(image_path), duration, negative, job))
+                                  lambda: fal.video(ep, prompt, Path(image_path) if image_path else None, duration, negative, job, ratio))
         except fal.FalDown as e:
             alt = free_alt("video")
             if job: job.progress(0.3, f"{e} Делаю бесплатно: {P.PROVIDERS[alt]['label']}.")
-            r = video(prompt, ratio, duration, image_path, seed, job, negative, scenes, hd, _pid=alt); r["note"] = str(e); return r
+            r = video(prompt, ratio, duration, image_path, seed, job, negative, scenes, hd, _pid="free"); r["note"] = str(e); return r
         return {"path": r["path"], "provider": "fal.ai · " + c["label"], "seed": seed, "ai_video": True, "paid_usd": c["usd"], "seconds": r["seconds"]}
+    if pid == "agnes":
+        import agnes
+        r = agnes.video(prompt, image_path, duration, ratio, seed, job)
+        return {"path": r["path"], "provider": "Agnes AI · Video 2.5 Flash", "seed": seed, "ai_video": True, "seconds": r["seconds"]}
     if pid == "hf_spaces":
         if not image_path:   # Wan 2.2 оживляет картинку: сначала рисуем стартовый кадр
             if job: job.progress(0.08, "Рисую стартовый кадр…")
